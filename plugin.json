@@ -1,0 +1,40 @@
+{
+  "pluginmetadataversion": 2,
+  "name": "llil_to_llvm",
+  "type": [
+    "ui",
+    "binaryview",
+    "helper"
+  ],
+  "api": [
+    "python3"
+  ],
+  "description": "LLIR to LLVM IR lifter",
+  "longdescription": "",
+  "license": {
+    "name": "MIT",
+    "text": "Copyright (c) 2022 krakan"
+  },
+  "platforms": [
+    "Darwin",
+    "Linux",
+    "Windows"
+  ],
+  "installinstructions": {
+    "Darwin": "",
+    "Linux": "",
+    "Windows": ""
+  },
+  "dependencies": {
+    "pip": [],
+    "apt": [
+      "apt",
+      "packages"
+    ],
+    "installers": [],
+    "other": []
+  },
+  "version": "0.0.1",
+  "author": "krakan",
+  "minimumbinaryninjaversion": 1200
+}
