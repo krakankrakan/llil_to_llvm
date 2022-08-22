@@ -34,6 +34,10 @@ def bn_function_type_to_llvm(func):
         param_types
     )
 
+def size_to_llvm_type(size):
+    if size != 0:
+        return ll.IntType(size * 8)
+
 class Lifter:
     bv = None
     br = None
@@ -76,6 +80,34 @@ class Lifter:
             else:
                 print("segment_data is none!")
 
+    def generate_reg_allocas_recursive(self, llil_inst, reg_to_alloca):
+
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_REG:
+            reg_name = llil_inst.operands[0].name
+
+            alloca = self.builder.alloca(
+                size_to_llvm_type(
+                    self.bv.arch.regs[reg_name].size
+                )
+            ) 
+            reg_to_alloca[reg_name] = alloca
+
+            return reg_to_alloca
+
+        for operand in llil_inst.operands:
+            if issubclass(type(operand), binaryninja.lowlevelil.LowLevelILInstruction):
+                reg_to_alloca = self.generate_reg_allocas_recursive(operand, reg_to_alloca)
+
+        return reg_to_alloca
+
+    def generate_reg_allocas(self, bn_func):
+        reg_to_alloca = {}
+
+        for llil_inst in bn_func.llil_instructions:
+            reg_to_alloca = self.generate_reg_allocas_recursive(llil_inst, reg_to_alloca)
+
+        return reg_to_alloca
+
     def visit_function(self, bn_func):
 
         #print(type(bn_func))
@@ -90,25 +122,41 @@ class Lifter:
         bb_entry = func.append_basic_block()
         self.builder.position_at_end(bb_entry)
 
+        # Stack allocation for the registers (which are actually used)
+        reg_to_alloca = self.generate_reg_allocas(bn_func)
+
+        # Dummy return instruction
         if (func_type.return_type == ll.VoidType()):
             self.builder.ret_void()
         else:
             self.builder.ret(ll.Constant(func_type.return_type, 0))
 
         for i in bn_func.llil_instructions:
-            self.visit_instruction(i)
+            self.visit_instruction(i, 0, reg_to_alloca)
 
-    def visit_instruction(self, llil_inst):
-        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_ADD:
-            self.builder.add(
-                self.visit_instruction(llil_inst.operands[0]),
-                self.visit_instruction(llil_inst.operands[1])
-            )
+    def visit_instruction(self, llil_inst, level, reg_to_alloca):
+        print(level * "   " + "visited:" + str(llil_inst.operation))
+        print(level * "   " + "operands: " + str(llil_inst.operands))
+
+        for operand in llil_inst.operands:
+            if issubclass(type(operand), binaryninja.lowlevelil.LowLevelILInstruction):
+                self.visit_instruction(operand, level+1, reg_to_alloca)
+            else:
+                print((level + 1) * "   " + "non-visited:" + str(type(operand)))
+
+        #if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_ADD:
+        #    self.builder.add(
+        #        self.visit_instruction(llil_inst.operands[0]),
+        #        self.visit_instruction(llil_inst.operands[1])
+        #    )
+
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_REG:
+            reg_name = llil_inst.operands[0].name
+            return reg_to_alloca[reg_name]
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_CONST:
-            self.builder.const(
-                ll.Constant(llil_inst.operands[0], llil_inst.operands[1])
-            )
+            return ll.Constant(size_to_llvm_type(8), llil_inst.operands[0])
+            #return llil_inst.operands[0]
 
     def dump(self):
         with open("/Users/krakan/out.txt", "w+") as f:
@@ -120,6 +168,5 @@ class Lifter:
         for fn in self.bv.functions:
             self.visit_function(fn)
 
-        print(self.module)
-
-        #self.dump()
+        #print(self.module)
+        self.dump()
