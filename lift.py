@@ -7,7 +7,6 @@ bn_operation_to_builder_func_map = {
     binaryninja.LowLevelILOperation.LLIL_OR :  "or_",
     binaryninja.LowLevelILOperation.LLIL_XOR : "xor",
     binaryninja.LowLevelILOperation.LLIL_AND : "and_",
-    binaryninja.LowLevelILOperation.LLIL_NOT : "_not",
     binaryninja.LowLevelILOperation.LLIL_LSL : "shl",
     binaryninja.LowLevelILOperation.LLIL_LSR : "lshr"
 }
@@ -103,23 +102,26 @@ class Lifter:
                 reg_size = 8
                 full_reg = reg_name
 
-                if self.check_is_partial_reg_arm(reg_name):
-                    full_reg = self.get_full_reg_arm(reg_name)
-                    reg_size = self.get_reg_size_arm(full_reg)
+                if full_reg not in reg_to_alloca:
+                    if self.check_is_partial_reg_arm(reg_name):
+                        full_reg = self.get_full_reg_arm(reg_name)
+                        reg_size = self.get_reg_size_arm(full_reg)
 
-                alloca = self.builder.alloca(
-                    size_to_llvm_type(
-                        reg_size
-                    )
-                )
-                reg_to_alloca[full_reg] = alloca
+                    #alloca = self.builder.alloca(
+                    #    size_to_llvm_type(
+                    #        reg_size
+                    #    ),
+                    #    name = full_reg
+                    #)
+                    reg_to_alloca[full_reg] = None# alloca
 
             # LLIL register is a variable/no architecture register
             else:
-                alloca = self.builder.alloca(
-                    size_to_llvm_type(8)
-                ) 
-                reg_to_alloca[reg_name] = alloca
+                #alloca = self.builder.alloca(
+                #    size_to_llvm_type(8),
+                #    name = reg_name
+                #) 
+                reg_to_alloca[reg_name] = None #alloca
         
         return reg_to_alloca
 
@@ -151,8 +153,18 @@ class Lifter:
         reg_to_alloca = {}
 
         for llil_inst in bn_func.llil_instructions:
-            print("generate_reg_allocas_recursive")
+            #print("generate_reg_allocas_recursive")
             reg_to_alloca = self.generate_reg_allocas_recursive(llil_inst, reg_to_alloca)
+
+        for reg in reg_to_alloca:
+            reg_size = self.get_reg_size_arm(reg)
+            alloca = self.builder.alloca(
+                        size_to_llvm_type(
+                            reg_size
+                        ),
+                        name = reg
+                    )
+            reg_to_alloca[reg] = alloca
 
         return reg_to_alloca
 
@@ -244,7 +256,10 @@ class Lifter:
         for i in bn_func.llil_instructions:
             self.visit_instruction(i, 0, reg_to_alloca)
 
-        print(func)
+        #print(func)
+        for bb in func.blocks:
+            for inst in bb.instructions:
+                print(inst)
 
     #def reg_to_llvm(self, reg_name):
     #    if self.check_is_partial_reg_arm(reg_name):
@@ -256,8 +271,8 @@ class Lifter:
         #print(level * "   " + "visited:" + str(llil_inst.operation))
         #print(level * "   " + "operands: " + str(llil_inst.operands))
 
-        print(llil_inst)
-        print(type(llil_inst))
+        #print(llil_inst)
+        #print(type(llil_inst))
 
         #for operand in llil_inst.operands:
         #    if issubclass(type(operand), binaryninja.lowlevelil.LowLevelILInstruction):
@@ -331,6 +346,13 @@ class Lifter:
                     )
                 )
 
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_NOT:
+            return (
+                size,
+                self.builder.not_(
+                    self.visit_instruction(llil_inst.operands[0], level+1, reg_to_alloca, size)[1],
+                    size_to_llvm_type(size)
+            ))
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_SX:
             return (
@@ -405,5 +427,5 @@ class Lifter:
         for fn in self.bv.functions:
             self.visit_function(fn)
 
-        #print(self.module)
-        self.dump()
+        print(self.module)
+        #self.dump()
