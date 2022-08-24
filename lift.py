@@ -217,7 +217,7 @@ class Lifter:
             )
 
             return self.builder.bitcast(
-                reg_to_alloca[full_reg],
+                loaded_reg,
                 size_to_llvm_type(self.get_reg_size_arm(reg_name))
             )
         else:
@@ -247,19 +247,33 @@ class Lifter:
         print("reg_to_alloca dict:")
         print(reg_to_alloca.keys())
 
+        for i in bn_func.llil_instructions:
+            print("Visit instruction:")
+            print(i)
+
+            self.visit_instruction(i, 0, reg_to_alloca)
+
+            #for bb in func.blocks:
+            #    for inst in bb.instructions:
+            #        print("Operands:")
+            #        for operand in inst.operands:
+            #            print(operand)
+            #        print("Instruction:")
+            #        print(inst.opname)
+            #        print(inst)
+
         # Dummy return instruction
         if (func_type.return_type == ll.VoidType()):
             self.builder.ret_void()
         else:
             self.builder.ret(ll.Constant(func_type.return_type, 0))
 
-        for i in bn_func.llil_instructions:
-            self.visit_instruction(i, 0, reg_to_alloca)
-
         #print(func)
         for bb in func.blocks:
             for inst in bb.instructions:
                 print(inst)
+
+        print("")
 
     #def reg_to_llvm(self, reg_name):
     #    if self.check_is_partial_reg_arm(reg_name):
@@ -268,7 +282,7 @@ class Lifter:
     #        return reg_name
 
     def visit_instruction(self, llil_inst, level, reg_to_alloca, size=8):
-        #print(level * "   " + "visited:" + str(llil_inst.operation))
+        print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
         #print(level * "   " + "operands: " + str(llil_inst.operands))
 
         #print(llil_inst)
@@ -320,13 +334,15 @@ class Lifter:
             if issubclass(type(llil_inst.operands[0]), binaryninja.lowlevelil.LowLevelILReg):
                 reg_name = llil_inst.operands[0].operands[0].name
 
+                store_value = self.visit_instruction(llil_inst.operands[1], level+1, reg_to_alloca, self.get_reg_size_arm(reg_name))
+
                 return (
                     0,
                     self.builder.store(
-                        self.visit_instruction(llil_inst.operands[1], level+1, reg_to_alloca, self.get_reg_size_arm(reg_name))[1],
+                        store_value[1],
                         self.builder.inttoptr(
                             self.visit_instruction(llil_inst.operands[0], level+1, reg_to_alloca)[1],
-                            ll.PointerType(size_to_llvm_type(self.get_reg_size_arm(reg_name)), 0)
+                            ll.PointerType(size_to_llvm_type(store_value[0]), 0)
                         )
                 ))
             else:
@@ -350,8 +366,7 @@ class Lifter:
             return (
                 size,
                 self.builder.not_(
-                    self.visit_instruction(llil_inst.operands[0], level+1, reg_to_alloca, size)[1],
-                    size_to_llvm_type(size)
+                    self.visit_instruction(llil_inst.operands[0], level+1, reg_to_alloca, size)[1]
             ))
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_SX:
