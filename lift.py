@@ -4,11 +4,24 @@ import llvmlite.ir as ll
 bn_operation_to_builder_func_map = {
     binaryninja.LowLevelILOperation.LLIL_ADD : "add",
     binaryninja.LowLevelILOperation.LLIL_SUB : "sub",
-    binaryninja.LowLevelILOperation.LLIL_OR :  "or_",
+    binaryninja.LowLevelILOperation.LLIL_OR  :  "or_",
     binaryninja.LowLevelILOperation.LLIL_XOR : "xor",
     binaryninja.LowLevelILOperation.LLIL_AND : "and_",
     binaryninja.LowLevelILOperation.LLIL_LSL : "shl",
     binaryninja.LowLevelILOperation.LLIL_LSR : "lshr"
+}
+
+bn_operation_cmp_map = {
+    binaryninja.LowLevelILOperation.LLIL_CMP_E   : ("u", "=="),
+    binaryninja.LowLevelILOperation.LLIL_CMP_NE  : ("u", "!="),
+    binaryninja.LowLevelILOperation.LLIL_CMP_SGE : ("s", ">="),
+    binaryninja.LowLevelILOperation.LLIL_CMP_SGT : ("s", ">"),
+    binaryninja.LowLevelILOperation.LLIL_CMP_SLE : ("s", "<="),
+    binaryninja.LowLevelILOperation.LLIL_CMP_SLT : ("s", "<"),
+    binaryninja.LowLevelILOperation.LLIL_CMP_UGE : ("u", ">="),
+    binaryninja.LowLevelILOperation.LLIL_CMP_UGT : ("u", ">"),
+    binaryninja.LowLevelILOperation.LLIL_CMP_ULE : ("u", "<="),
+    binaryninja.LowLevelILOperation.LLIL_CMP_ULT : ("u", "<")
 }
 
 def call_method(o, method, arg1, arg2):
@@ -225,18 +238,24 @@ class Lifter:
                 reg_to_alloca[reg_name]
             )
 
-            return loaded_reg 
+            return loaded_reg
 
-    def visit_function(self, bn_func):
+    def get_return_register_arm(self):
+        return "x0"
 
-        #print(type(bn_func))
-        print("Function: " + bn_func.name)
+    def create_function_declaration(self, bn_func):
+        print("Created function declaration for: " + bn_func.name)
 
         func_type = bn_function_type_to_llvm(bn_func)
 
         print(func_type)
 
         func = ll.Function(self.module, func_type, bn_func.name)
+
+        return func
+
+    def visit_function(self, bn_func, func):
+        #print(type(bn_func))
 
         bb_entry = func.append_basic_block()
         self.builder.position_at_end(bb_entry)
@@ -247,11 +266,101 @@ class Lifter:
         print("reg_to_alloca dict:")
         print(reg_to_alloca.keys())
 
-        for i in bn_func.llil_instructions:
-            print("Visit instruction:")
-            print(i)
+        bb_list = []
+        bb_seen = []
+        bb_dict = {} # Maps a LLIL address to a BasicBlock
+        bb_reverse_dict = {} # Maps a BasicBlock address to a LLIL address
+        bb_successors = {}
+        bb_check_values = {}
 
-            self.visit_instruction(i, 0, reg_to_alloca)
+        if len(list(bn_func.llil_instructions)) > 0:
+            bb_list.append(0)
+            bb_dict[0] = bb_entry
+        else:
+            return
+
+        while len(bb_list) > 0:
+            bb = bb_list[0]
+            del bb_list[0]
+
+            # Don't visit BBs twice
+            if bb in bb_seen:
+                continue
+            bb_seen.append(bb)
+
+            llvm_bb = None
+
+            if bb != 0:
+                llvm_bb = func.append_basic_block()
+                self.builder.position_at_end(llvm_bb)
+                bb_dict[bb] = llvm_bb
+            else:
+                llvm_bb = bb_entry
+
+            bb_reverse_dict[llvm_bb] = bb
+
+            print("LLIL address: " + str(bb))
+            print("BB name: " + str(llvm_bb.name))
+
+            idx = 0
+            for i in bn_func.llil_instructions:
+                if (idx >= bb):
+
+                    if self.is_jump(i):
+                        print("Visit jump instruction:")
+                        print(i)
+
+                        jump_info = self.visit_jump_instruction(i, func, 0, reg_to_alloca)
+
+                        # Store the BB successors
+                        next_bbs = jump_info[0]
+                        print("Successors: " + str(next_bbs))
+                        if next_bbs is not None:
+                            for next_bb in next_bbs:
+                                if next_bb not in bb_seen:
+                                    bb_list.append(next_bb)
+
+                        bb_successors[llvm_bb] = next_bbs
+
+                        bb_check_values[llvm_bb] = jump_info[1]
+
+                        break
+                    else:
+                        print("Visit instruction:")
+                        print(i)
+
+                        self.visit_instruction(i, func, 0, reg_to_alloca)
+
+                idx += 1
+            
+            print("Lifted BB at LLIL address: " + str(bb))
+
+        for bb, successors in bb_successors.items():
+            print("bb:")
+            print(bb)
+            print(bb.function.name)
+            print("LLIL address: " + str(bb_reverse_dict[bb]))
+            print("Successors: " + str(successors))
+
+            # RET
+            if len(successors) == 0:
+                continue
+            
+            # GOTO
+            elif len(successors) == 1:
+                successor = bb_dict[successors[0]]
+                self.builder = ll.IRBuilder(bb)
+                try:
+                    self.builder.branch(successor)
+                except:
+                    raise Exception("lelelelele")
+            
+            # IF
+            else:
+                successor_t = bb_dict[successors[0]]
+                successor_f = bb_dict[successors[1]]
+                self.builder = ll.IRBuilder(bb)
+                self.builder.cbranch(bb_check_values[bb], successor_t, successor_f)
 
             #for bb in func.blocks:
             #    for inst in bb.instructions:
@@ -262,18 +371,8 @@ class Lifter:
             #        print(inst.opname)
             #        print(inst)
 
-        # Dummy return instruction
-        if (func_type.return_type == ll.VoidType()):
-            self.builder.ret_void()
-        else:
-            self.builder.ret(ll.Constant(func_type.return_type, 0))
 
         #print(func)
-        for bb in func.blocks:
-            for inst in bb.instructions:
-                print(inst)
-
-        print("")
 
     #def reg_to_llvm(self, reg_name):
     #    if self.check_is_partial_reg_arm(reg_name):
@@ -281,8 +380,53 @@ class Lifter:
     #    else:
     #        return reg_name
 
-    def visit_instruction(self, llil_inst, level, reg_to_alloca, size=8):
-        print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
+    def is_jump(self, llil_inst):
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_GOTO or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_IF or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_NORET or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_RET:
+            return True
+        else:
+            return False
+
+    def visit_jump_instruction(self, llil_inst, func, level, reg_to_alloca, size=8):
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_GOTO:
+            return ([llil_inst.operands[0]], None)
+
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_IF:
+            # Visit the condition
+            cmp_value = self.visit_instruction(llil_inst.operands[0], func, 1, reg_to_alloca, size)
+            return ([llil_inst.operands[1], llil_inst.operands[2]], cmp_value) # T, F
+
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_NORET:
+            if (func.ftype.return_type == ll.VoidType()):
+                self.builder.ret_void()
+            else:
+                self.builder.ret(
+                    ll.Constant(func.ftype.return_type, 0)
+                )
+
+            return ([], None)
+
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_RET:
+            if (func.ftype.return_type == ll.VoidType()):
+                self.builder.ret_void()
+            else:
+                return_reg = self.get_return_register_arm()
+
+                loaded_reg = self.handle_reg_load_arm(return_reg, reg_to_alloca)
+
+                # Only cast if really needed.
+                if loaded_reg.type != func.ftype.return_type:
+                    casted_ret_cal = self.builder.bitcast(
+                        loaded_reg,
+                        func.ftype.return_type
+                    )
+                    self.builder.ret(casted_ret_cal)
+                else:
+                    self.builder.ret(loaded_reg)
+            
+            return ([], None)
+
+    def visit_instruction(self, llil_inst, func, level, reg_to_alloca, size=8):
+        #print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
         #print(level * "   " + "operands: " + str(llil_inst.operands))
 
         #print(llil_inst)
@@ -297,8 +441,8 @@ class Lifter:
 
         # Some instructions are easy to lift, like add, sub, and, etc..
         if llil_inst.operation in bn_operation_to_builder_func_map:
-            a = self.visit_instruction(llil_inst.operands[0], level+1, reg_to_alloca, size)
-            b = self.visit_instruction(llil_inst.operands[1], level+1, reg_to_alloca, size)
+            a = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, size)
+            b = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, size)
 
             # TODO: Is the correct size returned?
             return (
@@ -310,11 +454,41 @@ class Lifter:
                     b[1]
             ))
 
+        # List cmp instructions
+        if llil_inst.operation in bn_operation_cmp_map:
+            a = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, size)
+            b = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, size)
+
+            cmp_info = bn_operation_cmp_map[llil_inst.operation]
+
+            if cmp_info[0] == "u":
+                return (
+                    a[0],
+                    self.builder.icmp_unsigned(
+                        cmp_info[1],
+                        a[1],
+                        b[1]
+                    )
+                )
+
+            elif cmp_info[0] == "s":
+                return (
+                    a[0],
+                    self.builder.icmp_signed(
+                        cmp_info[1],
+                        a[1],
+                        b[1]
+                    )
+                )
+            
+            else:
+                raise Exception("CMP sign not detected")
+
         # Special handling for all other instructions
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_LOAD:
             loaded = None
 
-            loaded_value = self.visit_instruction(llil_inst.operands[0], level+1, reg_to_alloca, size)
+            loaded_value = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, size)
             if not issubclass(type(loaded_value[1].type), ll.PointerType):
                 loaded = self.builder.inttoptr(
                     loaded_value[1],
@@ -334,21 +508,21 @@ class Lifter:
             if issubclass(type(llil_inst.operands[0]), binaryninja.lowlevelil.LowLevelILReg):
                 reg_name = llil_inst.operands[0].operands[0].name
 
-                store_value = self.visit_instruction(llil_inst.operands[1], level+1, reg_to_alloca, self.get_reg_size_arm(reg_name))
+                store_value = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, self.get_reg_size_arm(reg_name))
 
                 return (
                     0,
                     self.builder.store(
                         store_value[1],
                         self.builder.inttoptr(
-                            self.visit_instruction(llil_inst.operands[0], level+1, reg_to_alloca)[1],
+                            self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca)[1],
                             ll.PointerType(size_to_llvm_type(store_value[0]), 0)
                         )
                 ))
             else:
-                store_location = self.visit_instruction(llil_inst.operands[1], level+1, reg_to_alloca, size)
+                store_location = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, size)
 
-                store_value = self.visit_instruction(llil_inst.operands[0], level+1, reg_to_alloca, store_location[0])
+                store_value = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, store_location[0])
                 casted_store_value = self.builder.inttoptr(
                     store_value[1],
                     ll.PointerType(size_to_llvm_type(store_value[0]), 0)
@@ -366,14 +540,14 @@ class Lifter:
             return (
                 size,
                 self.builder.not_(
-                    self.visit_instruction(llil_inst.operands[0], level+1, reg_to_alloca, size)[1]
+                    self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, size)[1]
             ))
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_SX:
             return (
                 size,
                 self.builder.sext(
-                    self.visit_instruction(llil_inst.operands[0], level+1, reg_to_alloca, size)[1],
+                    self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, size)[1],
                     size_to_llvm_type(size)
             ))
 
@@ -381,21 +555,18 @@ class Lifter:
             return (
                 int(size / 2),
                 self.builder.trunc(
-                    self.visit_instruction(llil_inst.operands[0], level+1, reg_to_alloca, size)[1],
+                    self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, size)[1],
                     size_to_llvm_type(int(size / 2))
             ))
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_SET_REG:
             reg_name = llil_inst.operands[0].name
 
-            #print("visit a:")
-            a = self.visit_instruction(llil_inst.operands[1], level+1, reg_to_alloca, self.get_reg_size_arm(reg_name))[1]
-            #print("a:")
-            #print(a)
+            value = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, self.get_reg_size_arm(reg_name))[1]
 
             self.handle_reg_assign_arm(
                 reg_name,
-                a,
+                value,
                 reg_to_alloca
             )
 
@@ -432,6 +603,8 @@ class Lifter:
 
             #self.builder.
 
+        print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
+
     def dump(self):
         with open("/Users/krakan/out.txt", "w+") as f:
             f.write(self.module.__str__())
@@ -439,8 +612,15 @@ class Lifter:
     def lift(self):
         self.create_data_global()
 
-        for fn in self.bv.functions:
-            self.visit_function(fn)
+        functions = []
 
-        print(self.module)
-        #self.dump()
+        for fn in self.bv.functions:
+            func = self.create_function_declaration(fn)
+            functions.append((fn, func))
+
+        for fn in functions:
+            print("FUNCTION: " + str(fn[0].name))
+            self.visit_function(fn[0], fn[1])
+
+        #print(self.module)
+        self.dump()
