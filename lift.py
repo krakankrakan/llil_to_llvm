@@ -1,5 +1,6 @@
 from binaryninja import *
 import llvmlite.ir as ll
+import llil_to_llvm.addr_map as addr_map
 
 bn_operation_to_builder_func_map = {
     binaryninja.LowLevelILOperation.LLIL_ADD : "add",
@@ -69,12 +70,14 @@ class Lifter:
     br = None
     builder = None
     module = None
+    lifter_get_mapped_addr_func = None
     
     def __init__(self, bv):
         self.bv = bv
         self.br = BinaryReader(bv, bv.endianness)
         self.module = ll.Module()
         self.builder = ll.IRBuilder()
+        self.insert_lifter_get_mapped_addr_func = addr_map.insert_lifter_get_mapped_addr_func(self.module)
 
     def create_data_global(self):
         global_data_segments = []
@@ -168,6 +171,10 @@ class Lifter:
         for llil_inst in bn_func.llil_instructions:
             #print("generate_reg_allocas_recursive")
             reg_to_alloca = self.generate_reg_allocas_recursive(llil_inst, reg_to_alloca)
+
+        # Append ARM function parameter registers
+        for reg in ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]:
+            reg_to_alloca = self.append_reg(reg, reg_to_alloca)
 
         for reg in reg_to_alloca:
             reg_size = self.get_reg_size_arm(reg)
@@ -443,15 +450,18 @@ class Lifter:
             return ([], None)
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_TAILCALL:
-            return_value = self.visit_instruction(llil_inst, func, 0, reg_to_alloca, size)
-            if return_value.type != func.ftype.return_type:
+            return_value = self.visit_instruction(llil_inst, func, 0, reg_to_alloca, size)[1]
+            print(return_value)
+            if (func.ftype.return_type != ll.VoidType()):
                 casted_ret_cal = self.builder.bitcast(
-                    loaded_reg,
+                    return_value,
                     func.ftype.return_type
                 )
                 self.builder.ret(casted_ret_cal)
             else:
-                self.builder.ret(return_value)
+                self.builder.ret_void()
+
+            return ([], None)
 
     def visit_instruction(self, llil_inst, func, level, reg_to_alloca, addr_to_func, size=8):
         #print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
@@ -627,11 +637,10 @@ class Lifter:
                 ll.Constant(size_to_llvm_type(size),
                     llil_inst.operands[0]
             ))
-            #return llil_inst.operands[0]
-
-            #self.builder.
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_CALL or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_TAILCALL:
+
+            # If the argument is a hardcoded address, we can simply look up the call target.
             if llil_inst.operands[0].operation == binaryninja.LowLevelILOperation.LLIL_CONST or llil_inst.operands[0].operation == binaryninja.LowLevelILOperation.LLIL_CONST_PTR:
 
                 callee_func = addr_to_func[llil_inst.operands[0].operands[0]]
@@ -652,7 +661,7 @@ class Lifter:
 
                 return_value = self.builder.call(callee_func, args)
 
-                if (callee_func.ftype.return_type != ll.VoidType()):
+                if (func.ftype.return_type != ll.VoidType()):
                     return_value = self.builder.bitcast(
                         return_value,
                         ll.IntType(64)
@@ -662,8 +671,34 @@ class Lifter:
                         self.get_reg_size_arm(self.get_return_register_arm()),
                         self.handle_reg_assign_arm(self.get_return_register_arm(), return_value, reg_to_alloca)
                     )
+
+            # Otherwise, we have to look up the call target during runtime.
             else:
-                raise Exception("Cannot get call target!")
+                #raise Exception("Cannot get call target!")
+
+                call_target = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, size)
+
+                #if call_target.type != ll.IntType(64):
+                #    call_target = self.builder.bitcast(
+                #        call_target,
+                #        ll.IntType(64)
+                #    )
+
+                new_addr = self.builder.call(self.insert_lifter_get_mapped_addr_func, [ call_target[1] ])
+
+                # We assume that the callee has 8 parameters.
+                args = self.get_arg_registers_arm(8, reg_to_alloca)
+                call_target_func_type =  ll.FunctionType(ll.IntType(64), [ll.IntType(64)] * 8)
+                call_target_casted = self.builder.inttoptr(new_addr, call_target_func_type)
+
+                return_value = self.builder.call(call_target_casted, args)
+
+                self.handle_reg_assign_arm(self.get_return_register_arm(), return_value, reg_to_alloca)
+
+                return (
+                        self.get_reg_size_arm(self.get_return_register_arm()),
+                        self.handle_reg_load_arm(self.get_return_register_arm(), reg_to_alloca)
+                    )
 
         print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
 
@@ -688,6 +723,8 @@ class Lifter:
         for fn in functions:
             print("FUNCTION: " + str(fn[0].name))
             self.visit_function(fn[0], fn[1], addr_to_func)
+
+        #self.module = addr_map.insert_addr_map_function(self.module)
 
         #print(self.module)
         self.dump()
