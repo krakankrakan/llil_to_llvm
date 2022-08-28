@@ -353,18 +353,16 @@ class Lifter:
 
                         self.visit_instruction(i, func, 0, reg_to_alloca, addr_to_func)
 
-                        #print(func)
-
                 idx += 1
             
             print("Lifted BB at LLIL address: " + str(bb))
 
         for bb, successors in bb_successors.items():
-            print("bb:")
-            print(bb)
-            print(bb.function.name)
-            print("LLIL address: " + str(bb_reverse_dict[bb]))
-            print("Successors: " + str(successors))
+            #print("bb:")
+            #print(bb)
+            #print(bb.function.name)
+            #print("LLIL address: " + str(bb_reverse_dict[bb]))
+            #print("Successors: " + str(successors))
 
             # RET
             if len(successors) == 0:
@@ -373,17 +371,16 @@ class Lifter:
             # GOTO
             elif len(successors) == 1:
                 successor = bb_dict[successors[0]]
-                self.builder = ll.IRBuilder(bb)
-                try:
-                    self.builder.branch(successor)
-                except:
-                    raise Exception("lelelelele")
+                #self.builder = ll.IRBuilder(bb)
+                self.builder.position_at_end(bb)
+                self.builder.branch(successor)
             
             # IF
             else:
                 successor_t = bb_dict[successors[0]]
                 successor_f = bb_dict[successors[1]]
-                self.builder = ll.IRBuilder(bb)
+                #self.builder = ll.IRBuilder(bb)
+                self.builder.position_at_end(bb)
                 self.builder.cbranch(bb_check_values[bb], successor_t, successor_f)
 
             #for bb in func.blocks:
@@ -396,7 +393,7 @@ class Lifter:
             #        print(inst)
 
 
-        #print(func)
+        print(func)
 
     #def reg_to_llvm(self, reg_name):
     #    if self.check_is_partial_reg_arm(reg_name):
@@ -416,7 +413,7 @@ class Lifter:
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_IF:
             # Visit the condition
-            cmp_value = self.visit_instruction(llil_inst.operands[0], func, 1, reg_to_alloca, size)
+            cmp_value = self.visit_instruction(llil_inst.operands[0], func, 1, reg_to_alloca, size)[1]
             return ([llil_inst.operands[1], llil_inst.operands[2]], cmp_value) # T, F
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_NORET:
