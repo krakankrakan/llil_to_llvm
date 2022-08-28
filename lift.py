@@ -346,6 +346,8 @@ class Lifter:
 
                         self.visit_instruction(i, func, 0, reg_to_alloca, addr_to_func)
 
+                        #print(func)
+
                 idx += 1
             
             print("Lifted BB at LLIL address: " + str(bb))
@@ -396,7 +398,7 @@ class Lifter:
     #        return reg_name
 
     def is_jump(self, llil_inst):
-        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_GOTO or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_IF or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_NORET or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_RET:
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_GOTO or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_IF or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_NORET or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_RET or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_TAILCALL:
             return True
         else:
             return False
@@ -439,6 +441,17 @@ class Lifter:
                     self.builder.ret(loaded_reg)
             
             return ([], None)
+
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_TAILCALL:
+            return_value = self.visit_instruction(llil_inst, func, 0, reg_to_alloca, size)
+            if return_value.type != func.ftype.return_type:
+                casted_ret_cal = self.builder.bitcast(
+                    loaded_reg,
+                    func.ftype.return_type
+                )
+                self.builder.ret(casted_ret_cal)
+            else:
+                self.builder.ret(return_value)
 
     def visit_instruction(self, llil_inst, func, level, reg_to_alloca, addr_to_func, size=8):
         #print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
@@ -623,9 +636,9 @@ class Lifter:
 
                 callee_func = addr_to_func[llil_inst.operands[0].operands[0]]
 
-                print(callee_func.ftype)
-                print(callee_func.args)
-                print(len(callee_func.args))
+                #print(callee_func.ftype)
+                #print(callee_func.args)
+                #print(len(callee_func.args))
 
                 args = self.get_arg_registers_arm(len(callee_func.args), reg_to_alloca)
 
@@ -640,15 +653,17 @@ class Lifter:
                 return_value = self.builder.call(callee_func, args)
 
                 if (callee_func.ftype.return_type != ll.VoidType()):
-                    casted_return_value = self.builder.bitcast(
+                    return_value = self.builder.bitcast(
                         return_value,
                         ll.IntType(64)
                     )
                     
                     return (
                         self.get_reg_size_arm(self.get_return_register_arm()),
-                        self.handle_reg_assign_arm(self.get_return_register_arm(), casted_return_value, reg_to_alloca)
+                        self.handle_reg_assign_arm(self.get_return_register_arm(), return_value, reg_to_alloca)
                     )
+            else:
+                raise Exception("Cannot get call target!")
 
         print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
 
