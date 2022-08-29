@@ -1,6 +1,7 @@
 from binaryninja import *
 import llvmlite.ir as ll
 import llil_to_llvm.addr_map as addr_map
+import llil_to_llvm.arch as arch
 
 bn_operation_to_builder_func_map = {
     binaryninja.LowLevelILOperation.LLIL_ADD : "add",
@@ -71,6 +72,7 @@ class Lifter:
     builder = None
     module = None
     lifter_get_mapped_addr_func = None
+    arch_funcs = None
     
     def __init__(self, bv):
         self.bv = bv
@@ -78,6 +80,15 @@ class Lifter:
         self.module = ll.Module()
         self.builder = ll.IRBuilder()
         self.insert_lifter_get_mapped_addr_func = addr_map.insert_lifter_get_mapped_addr_func(self.module)
+
+        if bv.arch == binaryninja.architecture.Architecture["aarch64"]:
+            self.arch_funcs = arch.ARMFunctions(self.builder)
+        elif bv.arch == binaryninja.architecture.Architecture["x86_64"]:
+            self.arch_funcs = arch.x86Functions(self.builder)
+        elif bv.arch == binaryninja.architecture.Architecture["riscv"]:
+            self.arch_funcs = arch.RISCVFunctions(self.builder)
+        else:
+            raise Exception("Architecture not supported by LLIL to LLVM lifter!")
 
     def create_data_global(self):
         global_data_segments = []
@@ -119,9 +130,9 @@ class Lifter:
                 full_reg = reg_name
 
                 if full_reg not in reg_to_alloca:
-                    if self.check_is_partial_reg_arm(reg_name):
-                        full_reg = self.get_full_reg_arm(reg_name)
-                        reg_size = self.get_reg_size_arm(full_reg)
+                    if self.arch_funcs.check_is_partial_reg(reg_name):
+                        full_reg = self.arch_funcs.get_full_reg(reg_name)
+                        reg_size = self.arch_funcs.get_reg_size(full_reg)
 
                     #alloca = self.builder.alloca(
                     #    size_to_llvm_type(
@@ -177,7 +188,7 @@ class Lifter:
             reg_to_alloca = self.generate_reg_allocas_recursive(llil_inst, reg_to_alloca)
 
         for reg in reg_to_alloca:
-            reg_size = self.get_reg_size_arm(reg)
+            reg_size = self.arch_funcs.get_reg_size(reg)
             alloca = self.builder.alloca(
                         size_to_llvm_type(
                             reg_size
@@ -187,83 +198,6 @@ class Lifter:
             reg_to_alloca[reg] = alloca
 
         return reg_to_alloca
-
-    # ARM Aarch64-specific register handling
-    def check_is_partial_reg_arm(self, reg_name):
-        if reg_name[0] == "w":
-            return True
-        return False
-
-    def get_full_reg_arm(self, reg_name):
-        return "x" + reg_name[1:]
-
-    def get_reg_size_arm(self, reg_name):
-        if reg_name[0] == "x":
-            return 8
-        if reg_name[0] == "w":
-            return 4
-        else:
-            return 8
-
-    # Casts a register pointer to the needed value.
-    def handle_reg_ptr_arm(self, reg_name, reg_to_alloca):
-        if self.check_is_partial_reg_arm(reg_name):
-            full_reg = self.get_full_reg_arm(reg_name)
-
-            casted_reg = self.builder.bitcast(
-                reg_to_alloca[full_reg],
-                ll.PointerType(size_to_llvm_type(self.get_reg_size_arm(reg_name)), 0)
-            )
-
-            return casted_reg
-        else:
-            return reg_to_alloca[reg_name]
-
-    # Casts an LLVM Value to the size needed by a register to hold the value.
-    def handle_reg_assign_arm(self, reg_name, value, reg_to_alloca):
-        reg_ptr = self.handle_reg_ptr_arm(reg_name, reg_to_alloca)
-
-        self.builder.store(
-            value,
-            reg_ptr
-        )
-
-    def handle_reg_load_arm(self, reg_name, reg_to_alloca):
-        if self.check_is_partial_reg_arm(reg_name):
-            full_reg = self.get_full_reg_arm(reg_name)
-
-            loaded_reg = self.builder.load(
-                reg_to_alloca[full_reg]
-            )
-
-            return self.builder.bitcast(
-                loaded_reg,
-                size_to_llvm_type(self.get_reg_size_arm(reg_name))
-            )
-        else:
-            loaded_reg = self.builder.load(
-                reg_to_alloca[reg_name]
-            )
-
-            return loaded_reg
-
-    def get_return_register_arm(self):
-        return "x0"
-
-    def get_arg_registers_arm(self, count, reg_to_alloca):
-        param_regs = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]
-
-        if count == 0:
-            return []
-        elif count <= 8:
-            loaded_regs = []
-
-            for param_reg in param_regs[0:count]:
-                loaded_regs.append(self.handle_reg_load_arm(param_reg, reg_to_alloca))
-
-            return loaded_regs
-        else:
-            raise Exception("Too many function arguments!")
 
     def create_function_declaration(self, bn_func):
         print("Created function declaration for: " + bn_func.name)
@@ -440,9 +374,9 @@ class Lifter:
             if (func.ftype.return_type == ll.VoidType()):
                 self.builder.ret_void()
             else:
-                return_reg = self.get_return_register_arm()
+                return_reg = self.arch_funcs.get_return_register()
 
-                loaded_reg = self.handle_reg_load_arm(return_reg, reg_to_alloca)
+                loaded_reg = self.arch_funcs.handle_reg_load(return_reg, reg_to_alloca)
 
                 # Only cast if really needed.
                 if loaded_reg.type != func.ftype.return_type:
@@ -553,7 +487,7 @@ class Lifter:
             if issubclass(type(llil_inst.operands[0]), binaryninja.lowlevelil.LowLevelILReg):
                 reg_name = llil_inst.operands[0].operands[0].name
 
-                store_value = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, addr_to_func, self.get_reg_size_arm(reg_name))
+                store_value = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, addr_to_func, self.arch_funcs.get_reg_size(reg_name))
 
                 return (
                     0,
@@ -607,9 +541,9 @@ class Lifter:
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_SET_REG:
             reg_name = llil_inst.operands[0].name
 
-            value = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, addr_to_func, self.get_reg_size_arm(reg_name))[1]
+            value = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, addr_to_func, self.arch_funcs.get_reg_size(reg_name))[1]
 
-            self.handle_reg_assign_arm(
+            self.arch_funcs.handle_reg_assign(
                 reg_name,
                 value,
                 reg_to_alloca
@@ -620,11 +554,11 @@ class Lifter:
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_REG:
             reg_name = llil_inst.operands[0].name
 
-            if self.get_reg_size_arm(reg_name) != size:
+            if self.arch_funcs.get_reg_size(reg_name) != size:
                 return (
                     size,
                     self.builder.bitcast(
-                        self.handle_reg_load_arm(
+                        self.arch_funcs.handle_reg_load(
                             reg_name,
                             reg_to_alloca
                         ),
@@ -632,8 +566,8 @@ class Lifter:
                 ))
             else:
                 return (
-                    self.get_reg_size_arm(reg_name),
-                    self.handle_reg_load_arm(
+                    self.arch_funcs.get_reg_size(reg_name),
+                    self.arch_funcs.handle_reg_load(
                         reg_name,
                         reg_to_alloca
                 ))
@@ -656,7 +590,7 @@ class Lifter:
                 #print(callee_func.args)
                 #print(len(callee_func.args))
 
-                args = self.get_arg_registers_arm(len(callee_func.args), reg_to_alloca)
+                args = self.arch_funcs.get_arg_registers(len(callee_func.args), reg_to_alloca)
 
                 # Cast args as needed
                 for i in range(0, len(args)):
@@ -675,8 +609,8 @@ class Lifter:
                     )
                     
                     return (
-                        self.get_reg_size_arm(self.get_return_register_arm()),
-                        self.handle_reg_assign_arm(self.get_return_register_arm(), return_value, reg_to_alloca)
+                        self.arch_funcs.get_reg_size(self.arch_funcs.get_return_register()),
+                        self.arch_funcs.handle_reg_assign(self.arch_funcs.get_return_register(), return_value, reg_to_alloca)
                     )
 
             # Otherwise, we have to look up the call target during runtime.
@@ -694,17 +628,17 @@ class Lifter:
                 new_addr = self.builder.call(self.insert_lifter_get_mapped_addr_func, [ call_target[1] ])
 
                 # We assume that the callee has 8 parameters.
-                args = self.get_arg_registers_arm(8, reg_to_alloca)
+                args = self.arch_funcs.get_arg_registers(8, reg_to_alloca)
                 call_target_func_type =  ll.FunctionType(ll.IntType(64), [ll.IntType(64)] * 8)
                 call_target_casted = self.builder.inttoptr(new_addr, call_target_func_type)
 
                 return_value = self.builder.call(call_target_casted, args)
 
-                self.handle_reg_assign_arm(self.get_return_register_arm(), return_value, reg_to_alloca)
+                self.arch_funcs.handle_reg_assign(self.arch_funcs.get_return_register(), return_value, reg_to_alloca)
 
                 return (
-                        self.get_reg_size_arm(self.get_return_register_arm()),
-                        self.handle_reg_load_arm(self.get_return_register_arm(), reg_to_alloca)
+                        self.arch_funcs.get_reg_size(self.arch_funcs.get_return_register()),
+                        self.arch_funcs.handle_reg_load(self.arch_funcs.get_return_register(), reg_to_alloca)
                     )
 
         print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
