@@ -1,4 +1,5 @@
 import llvmlite.ir as ll
+import llil_to_llvm.util as util
 
 def size_to_llvm_type(size):
     if size != 0:
@@ -19,7 +20,13 @@ class ArchitectureFunctionsBase:
         if self.check_is_partial_reg(reg_name):
             full_reg = self.get_full_reg(reg_name)
 
-            casted_reg = self.builder.bitcast(
+            #casted_reg = self.builder.bitcast(
+            #    reg_to_alloca[full_reg],
+            #    ll.PointerType(size_to_llvm_type(self.get_reg_size(reg_name)), 0)
+            #)
+
+            casted_reg = util.cast_to_type(
+                self.builder,
                 reg_to_alloca[full_reg],
                 ll.PointerType(size_to_llvm_type(self.get_reg_size(reg_name)), 0)
             )
@@ -45,7 +52,13 @@ class ArchitectureFunctionsBase:
                 reg_to_alloca[full_reg]
             )
 
-            return self.builder.bitcast(
+            #return self.builder.bitcast(
+            #    loaded_reg,
+            #    size_to_llvm_type(self.get_reg_size(reg_name))
+            #)
+
+            return util.cast_to_type(
+                self.builder,
                 loaded_reg,
                 size_to_llvm_type(self.get_reg_size(reg_name))
             )

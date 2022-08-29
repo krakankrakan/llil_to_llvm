@@ -2,6 +2,7 @@ from binaryninja import *
 import llvmlite.ir as ll
 import llil_to_llvm.addr_map as addr_map
 import llil_to_llvm.arch as arch
+import llil_to_llvm.util as util
 
 bn_operation_to_builder_func_map = {
     binaryninja.LowLevelILOperation.LLIL_ADD : "add",
@@ -228,7 +229,8 @@ class Lifter:
             func_arg = func.args[i]
 
             if func.args[i].type != ll.IntType(64):
-                func_arg = self.builder.bitcast(func_arg, ll.IntType(64))
+                #func_arg = self.builder.bitcast(func_arg, ll.IntType(64))
+                func_arg = util.cast_to_type(self.builder, func_arg, ll.IntType(64))
 
             self.builder.store(func_arg, reg)
 
@@ -365,7 +367,8 @@ class Lifter:
                 self.builder.ret_void()
             else:
                 self.builder.ret(
-                    ll.Constant(func.ftype.return_type, 0)
+                    #ll.Constant(func.ftype.return_type, 0)
+                    util.get_null(func.ftype.return_type)
                 )
 
             return ([], None)
@@ -380,7 +383,12 @@ class Lifter:
 
                 # Only cast if really needed.
                 if loaded_reg.type != func.ftype.return_type:
-                    casted_ret_cal = self.builder.bitcast(
+                    #casted_ret_cal = self.builder.bitcast(
+                    #    loaded_reg,
+                    #    func.ftype.return_type
+                    #)
+                    casted_ret_cal = util.cast_to_type(
+                        self.builder,
                         loaded_reg,
                         func.ftype.return_type
                     )
@@ -394,7 +402,12 @@ class Lifter:
             return_value = self.visit_instruction(llil_inst, func, 0, reg_to_alloca, size)[1]
             print(return_value)
             if (func.ftype.return_type != ll.VoidType()):
-                casted_ret_cal = self.builder.bitcast(
+                #casted_ret_cal = self.builder.bitcast(
+                #    return_value,
+                #    func.ftype.return_type
+                #)
+                casted_ret_cal = util.cast_to_type(
+                    self.builder,
                     return_value,
                     func.ftype.return_type
                 )
@@ -555,9 +568,19 @@ class Lifter:
             reg_name = llil_inst.operands[0].name
 
             if self.arch_funcs.get_reg_size(reg_name) != size:
+                #return (
+                #    size,
+                #    self.builder.bitcast(
+                #        self.arch_funcs.handle_reg_load(
+                #            reg_name,
+                #            reg_to_alloca
+                #        ),
+                #        size_to_llvm_type(size)
+                #))
                 return (
                     size,
-                    self.builder.bitcast(
+                    util.cast_to_type(
+                        self.builder,
                         self.arch_funcs.handle_reg_load(
                             reg_name,
                             reg_to_alloca
@@ -595,15 +618,25 @@ class Lifter:
                 # Cast args as needed
                 for i in range(0, len(args)):
                     if callee_func.args[i].type != args[i].type:
-                        args[i] = self.builder.bitcast(
+                        #args[i] = self.builder.bitcast(
+                        #    args[i],
+                        #    callee_func.args[i].type
+                        #)
+                        args[i] = util.cast_to_type(
+                            self.builder,
                             args[i],
                             callee_func.args[i].type
                         )
 
                 return_value = self.builder.call(callee_func, args)
 
-                if (func.ftype.return_type != ll.VoidType()):
-                    return_value = self.builder.bitcast(
+                if (callee_func.ftype.return_type != ll.VoidType()):
+                    #return_value = self.builder.bitcast(
+                    #    return_value,
+                    #    ll.IntType(64)
+                    #)
+                    return_value = util.cast_to_type(
+                        self.builder,
                         return_value,
                         ll.IntType(64)
                     )
@@ -611,6 +644,11 @@ class Lifter:
                     return (
                         self.arch_funcs.get_reg_size(self.arch_funcs.get_return_register()),
                         self.arch_funcs.handle_reg_assign(self.arch_funcs.get_return_register(), return_value, reg_to_alloca)
+                    )
+                else:
+                    return (
+                        8,
+                        ll.Constant(ll.IntType(64), 0)
                     )
 
             # Otherwise, we have to look up the call target during runtime.
@@ -630,7 +668,7 @@ class Lifter:
                 # We assume that the callee has 8 parameters.
                 args = self.arch_funcs.get_arg_registers(8, reg_to_alloca)
                 call_target_func_type =  ll.FunctionType(ll.IntType(64), [ll.IntType(64)] * 8)
-                call_target_casted = self.builder.inttoptr(new_addr, call_target_func_type)
+                call_target_casted = self.builder.inttoptr(new_addr, ll.PointerType(call_target_func_type, 0))
 
                 return_value = self.builder.call(call_target_casted, args)
 
@@ -644,10 +682,25 @@ class Lifter:
         print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
 
     def dump(self):
-        module_str = self.module.__str__() + "\n" + addr_map.ir_map_code
+        ir_map_code = addr_map.ir_map_code
 
-        with open("/Users/krakan/out.txt", "w+") as f:
-            f.write(module_str)
+        # Replace the declaration of "lifter_addr_map" in the IR code with the
+        # correct size
+        ir_map_code = ir_map_code.replace("[0 x i64]", "[" + str(len(addr_map.addr_map) * 3) + " x i64]")
+
+        module_str = self.module.__str__() + "\n" + ir_map_code
+
+        # Hack to replace the declaration of "lifter_get_mapped_addr" with
+        # the definition provided in addr_map.py
+        f_declaration = "declare i64 @\"lifter_get_mapped_addr\""
+
+        new_module_str = ""
+        for line in module_str.splitlines():
+            if not line.startswith(f_declaration):
+                new_module_str = new_module_str + line + "\n"
+
+        with open("/Users/krakan/out.ll", "w+") as f:
+            f.write(new_module_str)
 
     def lift(self):
         self.create_data_global()

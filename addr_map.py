@@ -7,8 +7,6 @@ addr_map = []
 # C code (data/map_addr.c) emitted as LLVM IR via: 
 #   clang -Wall map_addr.c -o map_addr.ll -S -emit-llvm
 ir_map_code = r"""
-@lifter_addr_map_size = external global i32, align 4
-@lifter_addr_map = external global [0 x i64], align 8
 @.str = private unnamed_addr constant [30 x i8] c"Could not map address: 0x%lx\0A\00", align 1
 
 ; Function Attrs: noinline nounwind optnone ssp uwtable
@@ -114,7 +112,12 @@ def insert_lifter_get_mapped_addr_func(module):
 def create_addr_map(module):
     global addr_map
 
-    flattened_addr_map = list(sum(addr_map, ()))
+    flattened_addr_map = []#list(sum(addr_map, ()))
+
+    for addr in addr_map:
+        flattened_addr_map.append(addr[0])
+        flattened_addr_map.append(addr[1])
+        flattened_addr_map.append(0)
     
     # Global variable for "lifter_addr_map"
     lifter_addr_map_initializer = ll.Constant(
@@ -146,11 +149,16 @@ def create_addr_map(module):
 
     for i in range(0, len(addr_map)):
         ptr = builder.gep(lifter_addr_map, [ ll.Constant(ll.IntType(64), 0), ll.Constant(ll.IntType(64), 2 + i*3) ])
+        value = builder.ptrtoint(
+            addr_map[i][2],
+            ll.IntType(64)
+        )
+        #value = builder.inttoptr(
+        #        value
+        #        ll.IntType(64)
+        #    )
         builder.store(
-            builder.inttoptr(
-                addr_map[i][2],
-                ll.IntType(64)
-            ),
+            value,
             ptr
         )
 
