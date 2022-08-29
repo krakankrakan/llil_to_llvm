@@ -138,9 +138,27 @@ def create_addr_map(module):
     lifter_addr_map_size.global_constant = True
     lifter_addr_map_size.initializer = lifter_addr_map_size_initializer
 
-def add_addr_map_function_entry(module, original_addr, llvm_func):
-    global addr_map
+    # Generate the lifter initialization function
+    init_func = ll.Function(module, ll.FunctionType(ll.VoidType(), []), "__lifter_init")
+    builder = ll.IRBuilder()
+    bb_entry = init_func.append_basic_block()
+    builder.position_at_end(bb_entry)
 
-    builder = ll.IRBuilder(module)
+    for i in range(0, len(addr_map)):
+        ptr = builder.gep(lifter_addr_map, [ ll.Constant(ll.IntType(64), 0), ll.Constant(ll.IntType(64), 2 + i*3) ])
+        builder.store(
+            builder.inttoptr(
+                addr_map[i][2],
+                ll.IntType(64)
+            ),
+            ptr
+        )
+
+    builder.ret_void()
+
+    return module
+
+def add_addr_map_function_entry(original_addr, llvm_func):
+    global addr_map
 
     addr_map.append((original_addr, 0, llvm_func))

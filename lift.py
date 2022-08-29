@@ -729,13 +729,13 @@ class Lifter:
             fn_start = fn[0].address_ranges[0].start
             addr_to_func[fn_start] = fn[1]
 
-            #addr_map.add_addr_map_function_entry(self.module, fn_start, fn[1])
+            addr_map.add_addr_map_function_entry(fn_start, fn[1])
 
         for fn in functions:
             print("FUNCTION: " + str(fn[0].name))
             self.visit_function(fn[0], fn[1], addr_to_func)
 
-        addr_map.create_addr_map(self.module)
+        self.module = addr_map.create_addr_map(self.module)
 
         #print(self.module)
         self.dump()
