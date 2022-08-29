@@ -1,6 +1,9 @@
 from binaryninja import *
 import llvmlite.ir as ll
 
+# Maps addresses of the original binary to new LLVM Values
+addr_map = []
+
 # C code (data/map_addr.c) emitted as LLVM IR via: 
 #   clang -Wall map_addr.c -o map_addr.ll -S -emit-llvm
 ir_map_code = r"""
@@ -108,8 +111,36 @@ def insert_lifter_get_mapped_addr_func(module):
 
     return lifter_get_mapped_addr
 
-def get_lifter_get_mapped_addr_func(module):
-    return [fn for fn in module.functions if fn.name == "lifter_get_mapped_addr"][0]
+def create_addr_map(module):
+    global addr_map
 
-def add_addr_map_function_entry(module):
-    pass
+    flattened_addr_map = list(sum(addr_map, ()))
+    
+    # Global variable for "lifter_addr_map"
+    lifter_addr_map_initializer = ll.Constant(
+        ll.ArrayType(ll.IntType(64), len(flattened_addr_map)),
+        flattened_addr_map
+    )
+
+    lifter_addr_map = ll.GlobalVariable(module, lifter_addr_map_initializer.type, name="lifter_addr_map")
+    lifter_addr_map.linkage = 'internal'
+    lifter_addr_map.global_constant = True
+    lifter_addr_map.initializer = lifter_addr_map_initializer
+
+    # Global variable for "lifter_addr_map_size"
+    lifter_addr_map_size_initializer = ll.Constant(
+        ll.IntType(32),
+        len(addr_map)
+    )
+
+    lifter_addr_map_size = ll.GlobalVariable(module, lifter_addr_map_size_initializer.type, name="lifter_addr_map_size")
+    lifter_addr_map_size.linkage = 'internal'
+    lifter_addr_map_size.global_constant = True
+    lifter_addr_map_size.initializer = lifter_addr_map_size_initializer
+
+def add_addr_map_function_entry(module, original_addr, llvm_func):
+    global addr_map
+
+    builder = ll.IRBuilder(module)
+
+    addr_map.append((original_addr, 0, llvm_func))

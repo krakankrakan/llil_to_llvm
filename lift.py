@@ -168,13 +168,13 @@ class Lifter:
     def generate_reg_allocas(self, bn_func):
         reg_to_alloca = {}
 
-        for llil_inst in bn_func.llil_instructions:
-            #print("generate_reg_allocas_recursive")
-            reg_to_alloca = self.generate_reg_allocas_recursive(llil_inst, reg_to_alloca)
-
         # Append ARM function parameter registers
         for reg in ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]:
             reg_to_alloca = self.append_reg(reg, reg_to_alloca)
+
+        for llil_inst in bn_func.llil_instructions:
+            #print("generate_reg_allocas_recursive")
+            reg_to_alloca = self.generate_reg_allocas_recursive(llil_inst, reg_to_alloca)
 
         for reg in reg_to_alloca:
             reg_size = self.get_reg_size_arm(reg)
@@ -287,6 +287,16 @@ class Lifter:
 
         print("reg_to_alloca dict:")
         print(reg_to_alloca.keys())
+
+        # Copy the function arguments in the correct registers
+        for i in range(0, len(func.args)):
+            reg = list(reg_to_alloca.values())[i]
+            func_arg = func.args[i]
+
+            if func.args[i].type != ll.IntType(64):
+                func_arg = self.builder.bitcast(func_arg, ll.IntType(64))
+
+            self.builder.store(func_arg, reg)
 
         bb_list = []
         bb_seen = []
@@ -700,8 +710,10 @@ class Lifter:
         print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
 
     def dump(self):
+        module_str = self.module.__str__() + "\n" + addr_map.ir_map_code
+
         with open("/Users/krakan/out.txt", "w+") as f:
-            f.write(self.module.__str__())
+            f.write(module_str)
 
     def lift(self):
         self.create_data_global()
@@ -717,11 +729,13 @@ class Lifter:
             fn_start = fn[0].address_ranges[0].start
             addr_to_func[fn_start] = fn[1]
 
+            #addr_map.add_addr_map_function_entry(self.module, fn_start, fn[1])
+
         for fn in functions:
             print("FUNCTION: " + str(fn[0].name))
             self.visit_function(fn[0], fn[1], addr_to_func)
 
-        #self.module = addr_map.insert_addr_map_function(self.module)
+        addr_map.create_addr_map(self.module)
 
         #print(self.module)
         self.dump()
