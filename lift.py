@@ -118,6 +118,9 @@ class Lifter:
                 data_constant = ll.Constant(ll_segment_data_type, bytearray(segment_data))
                 data_global = ll.GlobalVariable(self.module, ll_segment_data_type, "segment_" + hex(segment.start))
                 data_global.initializer = data_constant
+
+                # Also add address mapping
+                addr_map.add_addr_map_data_section(segment.start, segment_length, data_global)
             else:
                 print("segment_data is none!")
 
@@ -478,55 +481,48 @@ class Lifter:
 
         # Special handling for all other instructions
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_LOAD:
-            loaded = None
+            loaded_ptr = None
+            new_load_ptr = None
 
             loaded_value = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, size)
-            if not issubclass(type(loaded_value[1].type), ll.PointerType):
-                loaded = self.builder.inttoptr(
-                    loaded_value[1],
-                    ll.PointerType(loaded_value[1].type)
-                    )
-            else:
-                loaded = loaded_value[1]
+
+            new_load_ptr = self.builder.call(self.insert_lifter_get_mapped_addr_func, [ util.cast_to_type(self.builder, loaded_value[1], ll.IntType(64)) ])
+
+            loaded_ptr = self.builder.inttoptr(
+                new_load_ptr,
+                ll.PointerType(loaded_value[1].type)
+            )
 
             return (
                 loaded_value[0],
                 self.builder.load(
-                    loaded
+                    loaded_ptr
             ))
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_STORE:
+            store_value = None
 
             if issubclass(type(llil_inst.operands[0]), binaryninja.lowlevelil.LowLevelILReg):
                 reg_name = llil_inst.operands[0].operands[0].name
 
                 store_value = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, addr_to_func, self.arch_funcs.get_reg_size(reg_name))
-
-                return (
-                    0,
-                    self.builder.store(
-                        store_value[1],
-                        self.builder.inttoptr(
-                            self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func)[1],
-                            ll.PointerType(size_to_llvm_type(store_value[0]), 0)
-                        )
-                ))
             else:
-                store_location = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, addr_to_func, size)
+                store_value = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, addr_to_func, size)
 
-                store_value = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, store_location[0])
-                casted_store_value = self.builder.inttoptr(
+            store_ptr = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func)
+            new_store_ptr = self.builder.call(self.insert_lifter_get_mapped_addr_func, [ store_ptr[1] ])
+            new_store_ptr = self.builder.inttoptr(
+                new_store_ptr,
+                ll.PointerType(size_to_llvm_type(store_value[0]), 0)
+            )
+
+            return (
+                0,
+                self.builder.store(
                     store_value[1],
-                    ll.PointerType(size_to_llvm_type(store_value[0]), 0)
+                    new_store_ptr
                 )
-
-                return (
-                    0,
-                    self.builder.store(
-                        store_location[1],
-                        casted_store_value
-                    )
-                )
+            )
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_NOT:
             return (
@@ -601,6 +597,13 @@ class Lifter:
                 ll.Constant(size_to_llvm_type(size),
                     llil_inst.operands[0]
             ))
+
+        #if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_CONST_PTR:
+        #    new_addr = self.builder.call(self.insert_lifter_get_mapped_addr_func, [ ll.Constant(ll.IntType(64), llil_inst.operands[0]) ])
+        #    return (
+        #        size, 
+        #        new_addr
+        #    )
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_CALL or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_TAILCALL:
 
@@ -703,8 +706,6 @@ class Lifter:
             f.write(new_module_str)
 
     def lift(self):
-        self.create_data_global()
-
         functions = []
 
         for fn in self.bv.functions:
@@ -721,6 +722,8 @@ class Lifter:
         for fn in functions:
             print("FUNCTION: " + str(fn[0].name))
             self.visit_function(fn[0], fn[1], addr_to_func)
+
+        self.create_data_global()
 
         self.module = addr_map.create_addr_map(self.module)
 

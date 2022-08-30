@@ -170,3 +170,8 @@ def add_addr_map_function_entry(original_addr, llvm_func):
     global addr_map
 
     addr_map.append((original_addr, 0, llvm_func))
+
+def add_addr_map_data_section(original_addr, size, data_global):
+    global addr_map
+
+    addr_map.append((original_addr, size, data_global))
