@@ -32,19 +32,30 @@ def call_method(o, method, arg1, arg2):
 
 def bn_type_to_llvm(bn_type):
 
-    #print(bn_type)
-
-    if (bn_type == None):
+    if bn_type == None:
         return ll.VoidType()
 
-    if (bn_type.type_class == TypeClass.IntegerTypeClass):
+    if bn_type.type_class == TypeClass.IntegerTypeClass:
         return ll.IntType(bn_type.width * 8)
 
-    if (bn_type.type_class == TypeClass.PointerTypeClass):
+    if bn_type.type_class == TypeClass.PointerTypeClass:
         return ll.PointerType(ll.IntType(bn_type.width * 8), 0)
 
-    if (bn_type.type_class == TypeClass.VoidTypeClass):
+    if bn_type.type_class == TypeClass.VoidTypeClass:
         return ll.VoidType()
+
+    if bn_type.type_class == TypeClass.NamedTypeReferenceClass:
+        if bn_type.name == "off64_t" or  bn_type.name == "size_t" or bn_type.name == "ssize_t":
+            return ll.IntType(64)
+
+    if bn_type.type_class == TypeClass.StructureTypeClass:
+        struct_fields = []
+        for field in bn_type.members():
+            struct_fields.append(bn_type_to_llvm(field))
+        return ll.LiteralStructType(struct_fields, packed=bn_type.packed())
+
+    if bn_type.type_class == TypeClass.EnumerationTypeClass:
+        return ll.IntType(bn_type.width * 8)
 
     return None
 
@@ -184,7 +195,7 @@ class Lifter:
         reg_to_alloca = {}
 
         # Append ARM function parameter registers
-        for reg in ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]:
+        for reg in self.arch_funcs.param_regs:
             reg_to_alloca = self.append_reg(reg, reg_to_alloca)
 
         for llil_inst in bn_func.llil_instructions:
@@ -192,7 +203,10 @@ class Lifter:
             reg_to_alloca = self.generate_reg_allocas_recursive(llil_inst, reg_to_alloca)
 
         for reg in reg_to_alloca:
+            #print(reg)
             reg_size = self.arch_funcs.get_reg_size(reg)
+            #print(reg_size)
+
             alloca = self.builder.alloca(
                         size_to_llvm_type(
                             reg_size
@@ -564,15 +578,6 @@ class Lifter:
             reg_name = llil_inst.operands[0].name
 
             if self.arch_funcs.get_reg_size(reg_name) != size:
-                #return (
-                #    size,
-                #    self.builder.bitcast(
-                #        self.arch_funcs.handle_reg_load(
-                #            reg_name,
-                #            reg_to_alloca
-                #        ),
-                #        size_to_llvm_type(size)
-                #))
                 return (
                     size,
                     util.cast_to_type(
@@ -598,12 +603,51 @@ class Lifter:
                     llil_inst.operands[0]
             ))
 
-        #if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_CONST_PTR:
-        #    new_addr = self.builder.call(self.insert_lifter_get_mapped_addr_func, [ ll.Constant(ll.IntType(64), llil_inst.operands[0]) ])
-        #    return (
-        #        size, 
-        #        new_addr
-        #    )
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_PUSH:
+            sp = self.arch_funcs.get_stack_register()
+            sp_ptr = self.arch_funcs.handle_reg_load(
+                                        sp,
+                                        reg_to_alloca
+                                )
+
+            push_value = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, size)
+            self.builder.store(
+                push_value[1],
+                util.cast_to_type(self.builder, sp_ptr, ll.PointerType(ll.IntType(push_value[0] * 8), 0))
+            )
+
+            new_sp_ptr = self.builder.add(sp_ptr, ll.Constant(ll.IntType(64), push_value[0]))
+            return (
+                push_value[1],
+                self.arch_funcs.handle_reg_assign(
+                    sp,
+                    new_sp_ptr,
+                    reg_to_alloca
+                )
+            )
+
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_POP:
+            sp = self.arch_funcs.get_stack_register()
+            sp_ptr = self.arch_funcs.handle_reg_load(
+                                        sp,
+                                        reg_to_alloca
+                                )
+
+            pop_value = self.builder.load(
+                util.cast_to_type(self.builder, sp_ptr, ll.PointerType(ll.IntType(size * 8), 0))
+            )
+
+            new_sp_ptr = self.builder.add(sp_ptr, ll.Constant(ll.IntType(64), 8))
+            self.arch_funcs.handle_reg_assign(
+                sp,
+                new_sp_ptr,
+                reg_to_alloca
+            )
+
+            return (
+                size,
+                pop_value
+            )
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_CALL or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_TAILCALL:
 
@@ -621,10 +665,6 @@ class Lifter:
                 # Cast args as needed
                 for i in range(0, len(args)):
                     if callee_func.args[i].type != args[i].type:
-                        #args[i] = self.builder.bitcast(
-                        #    args[i],
-                        #    callee_func.args[i].type
-                        #)
                         args[i] = util.cast_to_type(
                             self.builder,
                             args[i],
@@ -634,10 +674,6 @@ class Lifter:
                 return_value = self.builder.call(callee_func, args)
 
                 if (callee_func.ftype.return_type != ll.VoidType()):
-                    #return_value = self.builder.bitcast(
-                    #    return_value,
-                    #    ll.IntType(64)
-                    #)
                     return_value = util.cast_to_type(
                         self.builder,
                         return_value,
@@ -659,12 +695,6 @@ class Lifter:
                 #raise Exception("Cannot get call target!")
 
                 call_target = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, size)
-
-                #if call_target.type != ll.IntType(64):
-                #    call_target = self.builder.bitcast(
-                #        call_target,
-                #        ll.IntType(64)
-                #    )
 
                 new_addr = self.builder.call(self.insert_lifter_get_mapped_addr_func, [ call_target[1] ])
 
@@ -702,8 +732,15 @@ class Lifter:
             if not line.startswith(f_declaration):
                 new_module_str = new_module_str + line + "\n"
 
-        with open("/Users/krakan/out.ll", "w+") as f:
-            f.write(new_module_str)
+        out_path = binaryninja.interaction.get_save_filename_input("Save LLVM IR File", ext=".ll")
+
+        if out_path is not None:
+            if len(out_path) > 3:
+                if out_path[-3:] != ".ll":
+                    out_path += ".ll"
+
+            with open(out_path, "w+") as f:
+                f.write(new_module_str)
 
     def lift(self):
         functions = []

@@ -71,11 +71,15 @@ class ArchitectureFunctionsBase:
 
     def get_return_register(self):
         pass
+    
+    def get_stack_register(self):
+        pass
 
     def get_arg_registers(self, count, reg_to_alloca):
         pass
 
 class ARMFunctions(ArchitectureFunctionsBase):
+    param_regs = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]
 
     def __init__(self, builder):
         self.builder = builder
@@ -100,8 +104,6 @@ class ARMFunctions(ArchitectureFunctionsBase):
         return "x0"
 
     def get_arg_registers(self, count, reg_to_alloca):
-        param_regs = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]
-
         if count == 0:
             return []
         elif count <= 8:
@@ -114,7 +116,12 @@ class ARMFunctions(ArchitectureFunctionsBase):
         else:
             raise Exception("Too many function arguments!")
 
+    def get_stack_register(self):
+        return "sp"
+
 class x86Functions(ArchitectureFunctionsBase):
+    param_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
+
     def __init__(self, builder):
         self.builder = builder
 
@@ -135,7 +142,7 @@ class x86Functions(ArchitectureFunctionsBase):
         return False
 
     def get_full_reg(self, reg_name):
-        if len(reg_name) == 2:
+        if reg_name[0] != "r" and len(reg_name) == 2:
             return "r" + reg_name[0] + "x"
 
         if len(reg_name) == 3:
@@ -148,13 +155,34 @@ class x86Functions(ArchitectureFunctionsBase):
         if len(reg_name) == 4:
             if reg_name[3] == "w":
                 return reg_name[0:3]
+        
+        return reg_name
+
+    def get_reg_size(self, reg_name):
+        if reg_name[0] == "r":
+            return 8
+
+        if len(reg_name) == 2:
+            return 1
+
+        if len(reg_name) == 3:
+            if reg_name[0] == "e":
+                return 4
+
+            if reg_name[2] == "w":
+                return 4
+
+        if len(reg_name) == 4:
+            if reg_name[3] == "w":
+                return 4
 
     def get_return_register(self):
         return "rax"
     
+    def get_stack_register(self):
+        return "rsp"
+    
     def get_arg_registers(self, count, reg_to_alloca):
-        param_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
-
         if count == 0:
             return []
         elif count <= 6:
@@ -168,6 +196,8 @@ class x86Functions(ArchitectureFunctionsBase):
             raise Exception("Too many function arguments!")
 
 class RISCVFunctions(ArchitectureFunctionsBase):
+    param_regs = ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"]
+
     def __init__(self, builder):
         self.builder = builder
 
@@ -183,9 +213,10 @@ class RISCVFunctions(ArchitectureFunctionsBase):
     def get_return_register(self):
         return "a0"
 
-    def get_arg_registers(self, count, reg_to_alloca):
-        param_regs = ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"]
+    def get_stack_register(self):
+        return "sp"
 
+    def get_arg_registers(self, count, reg_to_alloca):
         if count == 0:
             return []
         elif count <= 8:
