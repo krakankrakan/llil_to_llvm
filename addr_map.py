@@ -127,7 +127,7 @@ def create_addr_map(module):
 
     lifter_addr_map = ll.GlobalVariable(module, lifter_addr_map_initializer.type, name="lifter_addr_map")
     lifter_addr_map.linkage = 'internal'
-    lifter_addr_map.global_constant = True
+    lifter_addr_map.global_constant = False
     lifter_addr_map.initializer = lifter_addr_map_initializer
 
     # Global variable for "lifter_addr_map_size"
@@ -148,15 +148,12 @@ def create_addr_map(module):
     builder.position_at_end(bb_entry)
 
     for i in range(0, len(addr_map)):
-        ptr = builder.gep(lifter_addr_map, [ ll.Constant(ll.IntType(64), 0), ll.Constant(ll.IntType(64), 2 + i*3) ])
         value = builder.ptrtoint(
             addr_map[i][2],
             ll.IntType(64)
         )
-        #value = builder.inttoptr(
-        #        value
-        #        ll.IntType(64)
-        #    )
+        ptr = builder.gep(lifter_addr_map, [ ll.Constant(ll.IntType(64), 0), ll.Constant(ll.IntType(64), 2 + i*3) ])
+
         builder.store(
             value,
             ptr
