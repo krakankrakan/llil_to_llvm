@@ -249,6 +249,23 @@ class Lifter:
         print("reg_to_alloca dict:")
         print(reg_to_alloca.keys())
 
+        # Push a fake return address on the stack
+        sp_reg = self.arch_funcs.get_stack_register()
+        sp_ptr = self.arch_funcs.handle_reg_load(
+                                    sp_reg,
+                                    reg_to_alloca
+                            )
+        self.builder.store(
+            ll.Constant(ll.IntType(64), 0x4141414141414141),
+            util.cast_to_type(self.builder, sp_ptr, ll.PointerType(ll.IntType(64), 0))
+        )
+        new_sp_ptr = self.builder.add(sp_ptr, ll.Constant(ll.IntType(64), 8))
+        self.arch_funcs.handle_reg_assign(
+            sp_reg,
+            new_sp_ptr,
+            reg_to_alloca
+        )
+
         # Copy the function arguments in the correct registers
         for i in range(0, len(func.args)):
             reg = list(reg_to_alloca.values())[i]
@@ -718,7 +735,7 @@ class Lifter:
                         self.arch_funcs.handle_reg_load(self.arch_funcs.get_return_register(), reg_to_alloca)
                     )
 
-        print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
+        print("COULD NOT LIFT:" + str(llil_inst))
 
     def create_stack(self):
         self.sp = ll.GlobalVariable(self.module, ll.IntType(64), name="stack")
