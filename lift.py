@@ -504,17 +504,14 @@ class Lifter:
 
         # Special handling for all other instructions
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_LOAD:
-            loaded_ptr = None
-            new_load_ptr = None
+            loaded_value = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, 8)
 
-            loaded_value = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, size)
-
-            new_load_ptr = self.builder.call(self.insert_lifter_get_mapped_addr_func, [ util.cast_to_type(self.builder, loaded_value[1], ll.IntType(64)) ])
-
+            loaded_ptr = self.builder.call(self.insert_lifter_get_mapped_addr_func, [ util.cast_to_type(self.builder, loaded_value[1], ll.IntType(64)) ])
             loaded_ptr = self.builder.inttoptr(
-                new_load_ptr,
-                ll.PointerType(loaded_value[1].type)
+                loaded_ptr,
+                ll.PointerType(ll.IntType(64))
             )
+            loaded_ptr = util.cast_to_type(self.builder, loaded_ptr, ll.PointerType(ll.IntType(size * 8)))
 
             return (
                 loaded_value[0],
@@ -746,7 +743,7 @@ class Lifter:
             if not line.startswith(f_declaration):
                 new_module_str = new_module_str + line + "\n"
 
-        out_path = binaryninja.interaction.get_save_filename_input("Save LLVM IR File", ext=".ll")
+        out_path = binaryninja.interaction.get_save_filename_input("Save LLVM IR File", ext="*.ll")
 
         if out_path is not None:
             if len(out_path) > 3:
