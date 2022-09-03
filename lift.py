@@ -85,6 +85,7 @@ class Lifter:
     module = None
     lifter_get_mapped_addr_func = None
     arch_funcs = None
+    sp = None
     
     def __init__(self, bv):
         self.bv = bv
@@ -193,6 +194,7 @@ class Lifter:
 
     def generate_reg_allocas(self, bn_func):
         reg_to_alloca = {}
+        sp_reg = self.arch_funcs.get_stack_register()
 
         # Append ARM function parameter registers
         for reg in self.arch_funcs.param_regs:
@@ -202,7 +204,14 @@ class Lifter:
             #print("generate_reg_allocas_recursive")
             reg_to_alloca = self.generate_reg_allocas_recursive(llil_inst, reg_to_alloca)
 
+        if sp_reg in reg_to_alloca:
+            reg_to_alloca[sp_reg] = self.sp
+
         for reg in reg_to_alloca:
+            # Use the global variable for the stack register
+            if reg == sp_reg:
+                continue
+
             #print(reg)
             reg_size = self.arch_funcs.get_reg_size(reg)
             #print(reg_size)
@@ -714,6 +723,11 @@ class Lifter:
 
         print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
 
+    def create_stack(self):
+        self.sp = ll.GlobalVariable(self.module, ll.IntType(64), name="stack")
+        self.sp.linkage = 'external'
+        self.sp.global_constant = False
+
     def dump(self):
         ir_map_code = addr_map.ir_map_code
 
@@ -744,6 +758,8 @@ class Lifter:
 
     def lift(self):
         functions = []
+
+        self.create_stack()
 
         for fn in self.bv.functions:
             func = self.create_function_declaration(fn)

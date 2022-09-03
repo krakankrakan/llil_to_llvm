@@ -19,5 +19,5 @@ unsigned long lifter_get_mapped_addr(unsigned long addr) {
 
     printf("Could not map address: 0x%lx\n", addr);
 
-    return 0;
+    return addr;
 }
