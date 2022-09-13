@@ -109,7 +109,7 @@ class ARMFunctions(ArchitectureFunctionsBase):
         elif count <= 8:
             loaded_regs = []
 
-            for param_reg in param_regs[0:count]:
+            for param_reg in self.param_regs[0:count]:
                 loaded_regs.append(self.handle_reg_load(param_reg, reg_to_alloca))
 
             return loaded_regs
@@ -188,7 +188,7 @@ class x86Functions(ArchitectureFunctionsBase):
         elif count <= 6:
             loaded_regs = []
 
-            for param_reg in param_regs[0:count]:
+            for param_reg in self.param_regs[0:count]:
                 loaded_regs.append(self.handle_reg_load(param_reg, reg_to_alloca))
 
             return loaded_regs
@@ -222,7 +222,7 @@ class RISCVFunctions(ArchitectureFunctionsBase):
         elif count <= 8:
             loaded_regs = []
 
-            for param_reg in param_regs[0:count]:
+            for param_reg in self.param_regs[0:count]:
                 loaded_regs.append(self.handle_reg_load(param_reg, reg_to_alloca))
 
             return loaded_regs

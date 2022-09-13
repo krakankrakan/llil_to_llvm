@@ -204,8 +204,7 @@ class Lifter:
             #print("generate_reg_allocas_recursive")
             reg_to_alloca = self.generate_reg_allocas_recursive(llil_inst, reg_to_alloca)
 
-        if sp_reg in reg_to_alloca:
-            reg_to_alloca[sp_reg] = self.sp
+        reg_to_alloca[sp_reg] = self.sp
 
         for reg in reg_to_alloca:
             # Use the global variable for the stack register
