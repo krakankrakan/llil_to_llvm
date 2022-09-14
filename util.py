@@ -9,13 +9,13 @@ def cast_to_type(builder, value, dst_type):
             dst_type
         )
 
-    if isinstance(src_type, ll.IntType) and isinstance(dst_type, ll.PointerType):
+    elif isinstance(src_type, ll.IntType) and isinstance(dst_type, ll.PointerType):
         return builder.inttoptr(
             value,
             dst_type
         )
 
-    if isinstance(src_type, ll.IntType) and isinstance(dst_type, ll.IntType):
+    elif isinstance(src_type, ll.IntType) and isinstance(dst_type, ll.IntType):
         if src_type.width == dst_type.width:
             return value
 
@@ -30,6 +30,18 @@ def cast_to_type(builder, value, dst_type):
                 value,
                 dst_type
             )
+
+    elif isinstance(src_type, ll.FloatType) and isinstance(dst_type, ll.IntType):
+        return builder.bitcast(
+            value,
+            dst_type
+        )
+
+    elif isinstance(src_type, ll.IntType) and isinstance(dst_type, ll.FloatType):
+        return builder.bitcast(
+            value,
+            dst_type
+        )
 
     else:
         return builder.bitcast(

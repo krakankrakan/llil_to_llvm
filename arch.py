@@ -20,11 +20,6 @@ class ArchitectureFunctionsBase:
         if self.check_is_partial_reg(reg_name):
             full_reg = self.get_full_reg(reg_name)
 
-            #casted_reg = self.builder.bitcast(
-            #    reg_to_alloca[full_reg],
-            #    ll.PointerType(size_to_llvm_type(self.get_reg_size(reg_name)), 0)
-            #)
-
             casted_reg = util.cast_to_type(
                 self.builder,
                 reg_to_alloca[full_reg],
@@ -39,6 +34,9 @@ class ArchitectureFunctionsBase:
     def handle_reg_assign(self, reg_name, value, reg_to_alloca):
         reg_ptr = self.handle_reg_ptr(reg_name, reg_to_alloca)
 
+        if isinstance(value.type, ll.FloatType):
+            value = util.cast_to_type(self.builder, value, ll.IntType(self.get_reg_size(reg_name) * 8))
+
         self.builder.store(
             value,
             reg_ptr
@@ -51,11 +49,6 @@ class ArchitectureFunctionsBase:
             loaded_reg = self.builder.load(
                 reg_to_alloca[full_reg]
             )
-
-            #return self.builder.bitcast(
-            #    loaded_reg,
-            #    size_to_llvm_type(self.get_reg_size(reg_name))
-            #)
 
             return util.cast_to_type(
                 self.builder,
@@ -90,12 +83,22 @@ class ARMFunctions(ArchitectureFunctionsBase):
         return False
 
     def get_full_reg(self, reg_name):
-        return "x" + reg_name[1:]
+        if reg_name[0] == "w":
+            return "x" + reg_name[1:]
+
+        # TODO: Floating point
+        #if reg_name[0] == "s" or reg_name[0] == "d":
+        #    return "q" + reg_name[1:]
+        return reg_name
 
     def get_reg_size(self, reg_name):
-        if reg_name[0] == "x":
+        if reg_name == "sp":
             return 8
-        if reg_name[0] == "w":
+        if reg_name[0] == "q":
+            return 16
+        if reg_name[0] == "x" or reg_name[0] == "d":
+            return 8
+        if reg_name[0] == "w" or reg_name[0] == "s":
             return 4
         else:
             return 8
@@ -118,6 +121,12 @@ class ARMFunctions(ArchitectureFunctionsBase):
 
     def get_stack_register(self):
         return "sp"
+
+    def check_is_float_reg(self, reg):
+        if len(reg) == 3 or len(reg) == 2:
+            if (reg[0] == "s" and reg != "sp") or reg[0] == "d" or reg[0] == "q":
+                return True
+        return False
 
 class x86Functions(ArchitectureFunctionsBase):
     param_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
@@ -181,6 +190,11 @@ class x86Functions(ArchitectureFunctionsBase):
     
     def get_stack_register(self):
         return "rsp"
+
+    def check_is_float_reg(self, reg):
+        if reg == "rsp" or reg == "esp":
+            return True
+        return False
     
     def get_arg_registers(self, count, reg_to_alloca):
         if count == 0:
@@ -215,6 +229,11 @@ class RISCVFunctions(ArchitectureFunctionsBase):
 
     def get_stack_register(self):
         return "sp"
+
+    def check_is_float_reg(self, reg):
+        if reg == "sp":
+            return True
+        return False
 
     def get_arg_registers(self, count, reg_to_alloca):
         if count == 0:

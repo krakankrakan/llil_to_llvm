@@ -11,7 +11,18 @@ bn_operation_to_builder_func_map = {
     binaryninja.LowLevelILOperation.LLIL_XOR : "xor",
     binaryninja.LowLevelILOperation.LLIL_AND : "and_",
     binaryninja.LowLevelILOperation.LLIL_LSL : "shl",
-    binaryninja.LowLevelILOperation.LLIL_LSR : "lshr"
+    binaryninja.LowLevelILOperation.LLIL_LSR : "lshr",
+    binaryninja.LowLevelILOperation.LLIL_ASR : "ashr",
+    binaryninja.LowLevelILOperation.LLIL_DIVS    : "sdiv",
+    binaryninja.LowLevelILOperation.LLIL_DIVS_DP : "sdiv",
+    binaryninja.LowLevelILOperation.LLIL_DIVU    : "udiv",
+    binaryninja.LowLevelILOperation.LLIL_DIVU_DP : "udiv"
+}
+
+bn_mul_operation_to_builder_func_map = {
+    binaryninja.LowLevelILOperation.LLIL_MUL     : "umul_with_overflow",
+    binaryninja.LowLevelILOperation.LLIL_MULS_DP : "smul_with_overflow",
+    binaryninja.LowLevelILOperation.LLIL_MULU_DP : "umul_with_overflow"
 }
 
 bn_operation_cmp_map = {
@@ -77,6 +88,10 @@ def bn_function_type_to_llvm(func):
 def size_to_llvm_type(size):
     if size != 0:
         return ll.IntType(size * 8)
+
+def size_to_llvm_float_type(size):
+    if size != 0:
+        return ll.FloatType()
 
 class Lifter:
     bv = None
@@ -150,21 +165,11 @@ class Lifter:
                         full_reg = self.arch_funcs.get_full_reg(reg_name)
                         reg_size = self.arch_funcs.get_reg_size(full_reg)
 
-                    #alloca = self.builder.alloca(
-                    #    size_to_llvm_type(
-                    #        reg_size
-                    #    ),
-                    #    name = full_reg
-                    #)
-                    reg_to_alloca[full_reg] = None# alloca
+                    reg_to_alloca[full_reg] = None
 
             # LLIL register is a variable/no architecture register
             else:
-                #alloca = self.builder.alloca(
-                #    size_to_llvm_type(8),
-                #    name = reg_name
-                #) 
-                reg_to_alloca[reg_name] = None #alloca
+                reg_to_alloca[reg_name] = None
         
         return reg_to_alloca
 
@@ -220,7 +225,7 @@ class Lifter:
                             reg_size
                         ),
                         name = reg
-                    )
+                        )
             reg_to_alloca[reg] = alloca
 
         return reg_to_alloca
@@ -246,7 +251,7 @@ class Lifter:
         reg_to_alloca = self.generate_reg_allocas(bn_func)
 
         print("reg_to_alloca dict:")
-        print(reg_to_alloca.keys())
+        print(reg_to_alloca)
 
         # Push a fake return address on the stack
         sp_reg = self.arch_funcs.get_stack_register()
@@ -460,18 +465,6 @@ class Lifter:
             return ([], None)
 
     def visit_instruction(self, llil_inst, func, level, reg_to_alloca, addr_to_func, size=8):
-        #print((level + 1) * "   " + "visited:" + str(llil_inst.operation))
-        #print(level * "   " + "operands: " + str(llil_inst.operands))
-
-        #print(llil_inst)
-        #print(type(llil_inst))
-
-        #for operand in llil_inst.operands:
-        #    if issubclass(type(operand), binaryninja.lowlevelil.LowLevelILInstruction):
-        #        self.visit_instruction(operand, level+1, reg_to_alloca)
-        #    else:
-        #        #print((level + 1) * "   " + "non-visited:" + str(type(operand)))
-        #        pass
 
         # Some instructions are easy to lift, like add, sub, and, etc..
         if llil_inst.operation in bn_operation_to_builder_func_map:
@@ -486,7 +479,27 @@ class Lifter:
                     bn_operation_to_builder_func_map[llil_inst.operation],
                     a[1],
                     b[1]
-            ))
+                )
+            )
+
+        # Multiplication, division, with overflow. Return the resulting value and the carry (which will be ignored).
+        if llil_inst.operation in bn_mul_operation_to_builder_func_map:
+            a = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, size)
+            b = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, addr_to_func, size)
+
+            # TODO: Is the correct size returned?
+            return (
+                a[0],
+                self.builder.extract_value(
+                    call_method(
+                        self.builder,
+                        bn_mul_operation_to_builder_func_map[llil_inst.operation],
+                        a[1],
+                        b[1]
+                    ),
+                    0
+                )
+            )
 
         # List cmp instructions
         if llil_inst.operation in bn_operation_cmp_map:
@@ -734,7 +747,15 @@ class Lifter:
                         self.arch_funcs.handle_reg_load(self.arch_funcs.get_return_register(), reg_to_alloca)
                     )
 
-        print("COULD NOT LIFT:" + str(llil_inst))
+        # Floating-point instructions
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_FLOAT_CONST:
+            return (
+                size, 
+                ll.Constant(size_to_llvm_float_type(size),
+                    llil_inst.operands[0]
+            ))
+
+        print("COULD NOT LIFT:" + str(llil_inst) + ", operation: " + str(llil_inst.operation) + ", type: " + str(type(llil_inst)))
 
     def create_stack(self):
         self.sp = ll.GlobalVariable(self.module, ll.IntType(64), name="stack")
