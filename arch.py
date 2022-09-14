@@ -3,7 +3,7 @@ import llil_to_llvm.util as util
 
 def size_to_llvm_type(size):
     if size != 0:
-        return ll.IntType(size * 8)
+        return ll.IntType(size)
 
 class ArchitectureFunctionsBase:
     def check_is_partial_reg(self, reg_name):
@@ -35,7 +35,7 @@ class ArchitectureFunctionsBase:
         reg_ptr = self.handle_reg_ptr(reg_name, reg_to_alloca)
 
         if isinstance(value.type, ll.FloatType):
-            value = util.cast_to_type(self.builder, value, ll.IntType(self.get_reg_size(reg_name) * 8))
+            value = util.cast_to_type(self.builder, value, ll.IntType(self.get_reg_size(reg_name)))
 
         self.builder.store(
             value,
@@ -74,8 +74,9 @@ class ArchitectureFunctionsBase:
 class ARMFunctions(ArchitectureFunctionsBase):
     param_regs = ["x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7"]
 
-    def __init__(self, builder):
+    def __init__(self, builder, arch):
         self.builder = builder
+        self.arch = arch
 
     def check_is_partial_reg(self, reg_name):
         if reg_name[0] == "w":
@@ -93,15 +94,15 @@ class ARMFunctions(ArchitectureFunctionsBase):
 
     def get_reg_size(self, reg_name):
         if reg_name == "sp":
-            return 8
+            return 64
         if reg_name[0] == "q":
-            return 16
+            return 128
         if reg_name[0] == "x" or reg_name[0] == "d":
-            return 8
+            return 64
         if reg_name[0] == "w" or reg_name[0] == "s":
-            return 4
+            return 32
         else:
-            return 8
+            return 64
 
     def get_return_register(self):
         return "x0"
@@ -131,8 +132,9 @@ class ARMFunctions(ArchitectureFunctionsBase):
 class x86Functions(ArchitectureFunctionsBase):
     param_regs = ["rdi", "rsi", "rdx", "rcx", "r8", "r9"]
 
-    def __init__(self, builder):
+    def __init__(self, builder, arch):
         self.builder = builder
+        self.arch = arch
 
     def check_is_partial_reg(self, reg_name):
         # Registers like al, cl, dl, bl
@@ -169,21 +171,21 @@ class x86Functions(ArchitectureFunctionsBase):
 
     def get_reg_size(self, reg_name):
         if reg_name[0] == "r":
-            return 8
+            return 64
 
         if len(reg_name) == 2:
-            return 1
+            return 8
 
         if len(reg_name) == 3:
             if reg_name[0] == "e":
-                return 4
+                return 32
 
             if reg_name[2] == "w":
-                return 4
+                return 32
 
         if len(reg_name) == 4:
             if reg_name[3] == "w":
-                return 4
+                return 32
 
     def get_return_register(self):
         return "rax"
@@ -212,8 +214,9 @@ class x86Functions(ArchitectureFunctionsBase):
 class RISCVFunctions(ArchitectureFunctionsBase):
     param_regs = ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7"]
 
-    def __init__(self, builder):
+    def __init__(self, builder, arch):
         self.builder = builder
+        self.arch = arch
 
     def check_is_partial_reg(self, reg_name):
         return False

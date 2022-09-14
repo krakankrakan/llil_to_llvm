@@ -87,7 +87,7 @@ def bn_function_type_to_llvm(func):
 
 def size_to_llvm_type(size):
     if size != 0:
-        return ll.IntType(size * 8)
+        return ll.IntType(size)
 
 def size_to_llvm_float_type(size):
     if size != 0:
@@ -110,11 +110,11 @@ class Lifter:
         self.insert_lifter_get_mapped_addr_func = addr_map.insert_lifter_get_mapped_addr_func(self.module)
 
         if bv.arch == binaryninja.architecture.Architecture["aarch64"]:
-            self.arch_funcs = arch.ARMFunctions(self.builder)
+            self.arch_funcs = arch.ARMFunctions(self.builder, self.bv.arch)
         elif bv.arch == binaryninja.architecture.Architecture["x86_64"]:
-            self.arch_funcs = arch.x86Functions(self.builder)
+            self.arch_funcs = arch.x86Functions(self.builder, self.bv.arch)
         elif bv.arch == binaryninja.architecture.Architecture["riscv"]:
-            self.arch_funcs = arch.RISCVFunctions(self.builder)
+            self.arch_funcs = arch.RISCVFunctions(self.builder, self.bv.arch)
         else:
             raise Exception("Architecture not supported by LLIL to LLVM lifter!")
 
@@ -157,7 +157,7 @@ class Lifter:
             if reg_name in self.bv.arch.regs:
 
                 # Check if it is a partial register only
-                reg_size = 8
+                reg_size = 64
                 full_reg = reg_name
 
                 if full_reg not in reg_to_alloca:
@@ -227,6 +227,14 @@ class Lifter:
                         name = reg
                         )
             reg_to_alloca[reg] = alloca
+
+        # Architecture flags
+        for flag in self.bv.arch.flags:
+            alloca = self.builder.alloca(
+                        ll.IntType(1),
+                        name = flag
+                        )
+            reg_to_alloca[flag] = alloca
 
         return reg_to_alloca
 
@@ -400,7 +408,7 @@ class Lifter:
         else:
             return False
 
-    def visit_jump_instruction(self, llil_inst, func, level, reg_to_alloca, size=8):
+    def visit_jump_instruction(self, llil_inst, func, level, reg_to_alloca, size=64):
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_GOTO:
             return ([llil_inst.operands[0]], None)
 
@@ -464,7 +472,7 @@ class Lifter:
 
             return ([], None)
 
-    def visit_instruction(self, llil_inst, func, level, reg_to_alloca, addr_to_func, size=8):
+    def visit_instruction(self, llil_inst, func, level, reg_to_alloca, addr_to_func, size=64):
 
         # Some instructions are easy to lift, like add, sub, and, etc..
         if llil_inst.operation in bn_operation_to_builder_func_map:
@@ -532,15 +540,27 @@ class Lifter:
                 raise Exception("CMP sign not detected")
 
         # Special handling for all other instructions
+
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_CONST or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_CONST_PTR:
+            return (
+                size, 
+                ll.Constant(size_to_llvm_type(size),
+                    llil_inst.operands[0]
+            ))
+    
+        #
+        # Memory instructions
+        #
+
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_LOAD:
-            loaded_value = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, 8)
+            loaded_value = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, 64)
 
             loaded_ptr = self.builder.call(self.insert_lifter_get_mapped_addr_func, [ util.cast_to_type(self.builder, loaded_value[1], ll.IntType(64)) ])
             loaded_ptr = self.builder.inttoptr(
                 loaded_ptr,
                 ll.PointerType(ll.IntType(64))
             )
-            loaded_ptr = util.cast_to_type(self.builder, loaded_ptr, ll.PointerType(ll.IntType(size * 8)))
+            loaded_ptr = util.cast_to_type(self.builder, loaded_ptr, ll.PointerType(ll.IntType(size)))
 
             return (
                 loaded_value[0],
@@ -573,6 +593,25 @@ class Lifter:
                 )
             )
 
+        #
+        # Arithmetic instructions
+        #
+
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_ADD_OVERFLOW:
+            a = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, size)
+            b = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, addr_to_func, size)
+
+            return (
+                a[0],
+                self.builder.extract_value(
+                    self.builder.uadd_with_overflow(
+                        a[1],
+                        b[1]
+                    ),
+                    1
+                )
+            )
+
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_NOT:
             return (
                 size,
@@ -596,7 +635,11 @@ class Lifter:
                     size_to_llvm_type(int(size / 2))
             ))
 
-        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_SET_REG:
+        #
+        # Register/Flag instructions
+        #
+
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_SET_REG or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_SET_FLAG:
             reg_name = llil_inst.operands[0].name
 
             value = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, addr_to_func, self.arch_funcs.get_reg_size(reg_name))[1]
@@ -609,7 +652,7 @@ class Lifter:
 
             return None
 
-        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_REG:
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_REG or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_FLAG:
             reg_name = llil_inst.operands[0].name
 
             if self.arch_funcs.get_reg_size(reg_name) != size:
@@ -631,12 +674,9 @@ class Lifter:
                         reg_to_alloca
                 ))
 
-        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_CONST or llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_CONST_PTR:
-            return (
-                size, 
-                ll.Constant(size_to_llvm_type(size),
-                    llil_inst.operands[0]
-            ))
+        #
+        # Stack instructions
+        #
 
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_PUSH:
             sp = self.arch_funcs.get_stack_register()
@@ -648,7 +688,7 @@ class Lifter:
             push_value = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, size)
             self.builder.store(
                 push_value[1],
-                util.cast_to_type(self.builder, sp_ptr, ll.PointerType(ll.IntType(push_value[0] * 8), 0))
+                util.cast_to_type(self.builder, sp_ptr, ll.PointerType(ll.IntType(push_value[0]), 0))
             )
 
             new_sp_ptr = self.builder.add(sp_ptr, ll.Constant(ll.IntType(64), push_value[0]))
@@ -669,7 +709,7 @@ class Lifter:
                                 )
 
             pop_value = self.builder.load(
-                util.cast_to_type(self.builder, sp_ptr, ll.PointerType(ll.IntType(size * 8), 0))
+                util.cast_to_type(self.builder, sp_ptr, ll.PointerType(ll.IntType(size), 0))
             )
 
             new_sp_ptr = self.builder.add(sp_ptr, ll.Constant(ll.IntType(64), 8))
@@ -721,7 +761,7 @@ class Lifter:
                     )
                 else:
                     return (
-                        8,
+                        64,
                         ll.Constant(ll.IntType(64), 0)
                     )
 
@@ -747,7 +787,10 @@ class Lifter:
                         self.arch_funcs.handle_reg_load(self.arch_funcs.get_return_register(), reg_to_alloca)
                     )
 
+        #
         # Floating-point instructions
+        #
+
         if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_FLOAT_CONST:
             return (
                 size, 
