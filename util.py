@@ -3,6 +3,12 @@ import llvmlite.ir as ll
 def cast_to_type(builder, value, dst_type):
     src_type = value.type
 
+    print("src_type: " + str(src_type))
+    print("dst_type: " + str(dst_type))
+
+    if src_type == dst_type:
+        return value
+
     if isinstance(src_type, ll.PointerType) and isinstance(dst_type, ll.IntType):
         return builder.ptrtoint(
             value,
@@ -31,14 +37,42 @@ def cast_to_type(builder, value, dst_type):
                 dst_type
             )
 
-    elif isinstance(src_type, ll.FloatType) and isinstance(dst_type, ll.IntType):
+    elif (isinstance(src_type, ll.FloatType) or isinstance(src_type, ll.DoubleType)) and isinstance(dst_type, ll.IntType):
+        if isinstance(src_type, ll.FloatType):
+            target_size = 32
+        else :
+            target_size = 64
+
+        if target_size != dst_type.width:
+            value = cast_to_type(builder, value, ll.IntType(target_size))
+
         return builder.bitcast(
             value,
             dst_type
         )
 
-    elif isinstance(src_type, ll.IntType) and isinstance(dst_type, ll.FloatType):
+    elif isinstance(src_type, ll.IntType) and (isinstance(dst_type, ll.FloatType) or isinstance(dst_type, ll.DoubleType)):
+        if isinstance(dst_type, ll.FloatType):
+            target_size = 32
+        else :
+            target_size = 64
+
+        if target_size != src_type.width:
+            value = cast_to_type(builder, value, ll.IntType(target_size))
+
         return builder.bitcast(
+            value,
+            dst_type
+        )
+
+    elif isinstance(src_type, ll.FloatType) and isinstance(dst_type, ll.DoubleType):
+        return builder.fpext(
+            value,
+            dst_type
+        )
+
+    elif isinstance(src_type, ll.DoubleType) and isinstance(dst_type, ll.FloatType):
+        return builder.fptrunc(
             value,
             dst_type
         )

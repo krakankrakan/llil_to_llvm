@@ -1,5 +1,6 @@
 from binaryninja import *
 import llvmlite.ir as ll
+import llvmlite.binding as ll_binding
 import llil_to_llvm.addr_map as addr_map
 import llil_to_llvm.arch as arch
 import llil_to_llvm.util as util
@@ -17,6 +18,15 @@ bn_operation_to_builder_func_map = {
     binaryninja.LowLevelILOperation.LLIL_DIVS_DP : "sdiv",
     binaryninja.LowLevelILOperation.LLIL_DIVU    : "udiv",
     binaryninja.LowLevelILOperation.LLIL_DIVU_DP : "udiv"
+}
+
+bn_float_operation_to_builder_func_map = {
+    binaryninja.LowLevelILOperation.LLIL_FADD : "fadd",
+    binaryninja.LowLevelILOperation.LLIL_FMUL : "fmul",
+    binaryninja.LowLevelILOperation.LLIL_FDIV : "fdiv",
+    binaryninja.LowLevelILOperation.LLIL_FNEG : "fneg",
+    #binaryninja.LowLevelILOperation.LLIL_FSQRT : ""
+    binaryninja.LowLevelILOperation.LLIL_FSUB : "fsub"
 }
 
 bn_mul_operation_to_builder_func_map = {
@@ -90,8 +100,10 @@ def size_to_llvm_type(size):
         return ll.IntType(size)
 
 def size_to_llvm_float_type(size):
-    if size != 0:
+    if size == 32:
         return ll.FloatType()
+    if size == 64:
+        return ll.DoubleType()
 
 class Lifter:
     bv = None
@@ -99,6 +111,7 @@ class Lifter:
     builder = None
     module = None
     lifter_get_mapped_addr_func = None
+    trap_func = None
     arch_funcs = None
     sp = None
     
@@ -108,6 +121,7 @@ class Lifter:
         self.module = ll.Module()
         self.builder = ll.IRBuilder()
         self.insert_lifter_get_mapped_addr_func = addr_map.insert_lifter_get_mapped_addr_func(self.module)
+        self.trap_func = ll.Function(self.module, ll.FunctionType(ll.VoidType(), []), "_trap")
 
         if bv.arch == binaryninja.architecture.Architecture["aarch64"]:
             self.arch_funcs = arch.ARMFunctions(self.builder, self.bv.arch)
@@ -509,6 +523,21 @@ class Lifter:
                 )
             )
 
+        if llil_inst.operation in bn_float_operation_to_builder_func_map:
+            a = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, size)
+            b = self.visit_instruction(llil_inst.operands[1], func, level+1, reg_to_alloca, addr_to_func, size)
+
+            # TODO: Is the correct size returned?
+            return (
+                a[0],
+                call_method(
+                    self.builder,
+                    bn_float_operation_to_builder_func_map[llil_inst.operation],
+                    util.cast_to_type(self.builder, a[1], size_to_llvm_float_type(size)),
+                    util.cast_to_type(self.builder, b[1], size_to_llvm_float_type(size))
+                )
+            )
+
         # List cmp instructions
         if llil_inst.operation in bn_operation_cmp_map:
             a = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, size)
@@ -797,6 +826,48 @@ class Lifter:
                 ll.Constant(size_to_llvm_float_type(size),
                     llil_inst.operands[0]
             ))
+
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_FLOAT_TO_INT:
+            return self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, size)
+
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_FLOAT_CONV:
+
+            # We assume that only registers are converted.
+            reg_name =  llil_inst.operands[0].operands[0].name
+
+            return(
+                self.arch_funcs.get_reg_size(reg_name),
+                util.cast_to_type(
+                    self.builder,
+                    self.arch_funcs.handle_reg_load(
+                        reg_name,
+                        reg_to_alloca
+                    ),
+                    size_to_llvm_float_type(size)
+            ))
+
+            #float_value_to_convert = self.visit_instruction(llil_inst.operands[0], func, level+1, reg_to_alloca, addr_to_func, size)
+            #
+            ## We assume that we only convert from 64-bit to 32-bit floatin-point values and vice versa.
+            #if size == 64:
+            #    return (
+            #        32,
+            #        util.cast_to_type(self.builder, float_value_to_convert[1], ll.FloatType)
+            #    )
+            #elif size == 32:
+            #    return (
+            #        64,
+            #        util.cast_to_type(self.builder, float_value_to_convert[1], ll.DoubleType)
+            #    )
+
+        #
+        # Other
+        #
+        if llil_inst.operation == binaryninja.LowLevelILOperation.LLIL_TRAP:
+            return (
+                size,
+                self.builder.call(self.trap_func, [])
+            )
 
         print("COULD NOT LIFT:" + str(llil_inst) + ", operation: " + str(llil_inst.operation) + ", type: " + str(type(llil_inst)))
 

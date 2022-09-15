@@ -1,10 +1,16 @@
 #include <sys/mman.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 extern unsigned long _main();
 extern void __lifter_init();
 
 unsigned long stack;
+
+void _trap() {
+    printf("Trap hit!\n");
+    exit(-1);
+}
 
 int main() {
     stack = (unsigned long) mmap(0, 0x1000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);

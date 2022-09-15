@@ -34,7 +34,7 @@ class ArchitectureFunctionsBase:
     def handle_reg_assign(self, reg_name, value, reg_to_alloca):
         reg_ptr = self.handle_reg_ptr(reg_name, reg_to_alloca)
 
-        if isinstance(value.type, ll.FloatType):
+        if isinstance(value.type, ll.FloatType) or isinstance(value.type, ll.DoubleType):
             value = util.cast_to_type(self.builder, value, ll.IntType(self.get_reg_size(reg_name)))
 
         self.builder.store(
@@ -93,6 +93,8 @@ class ARMFunctions(ArchitectureFunctionsBase):
         return reg_name
 
     def get_reg_size(self, reg_name):
+        if len(reg_name) == 1:
+            return 1
         if reg_name == "sp":
             return 64
         if reg_name[0] == "q":
@@ -125,7 +127,13 @@ class ARMFunctions(ArchitectureFunctionsBase):
 
     def check_is_float_reg(self, reg):
         if len(reg) == 3 or len(reg) == 2:
-            if (reg[0] == "s" and reg != "sp") or reg[0] == "d" or reg[0] == "q":
+            if reg[0] == "s" and reg != "sp":
+                return True
+        return False
+
+    def check_is_double_reg(self, reg):
+        if len(reg) == 3 or len(reg) == 2:
+            if reg[0] == "d":
                 return True
         return False
 
